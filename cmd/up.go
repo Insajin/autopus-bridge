@@ -1,0 +1,777 @@
+// Package cmd provides CLI commands for Local Agent Bridge.
+// up.go implements the unified "up" command that combines login, setup, and connect.
+// FR-P1-09: Single smart command for complete bridge startup.
+package cmd
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/insajin/autopus-bridge/internal/auth"
+	"github.com/insajin/autopus-bridge/internal/branding"
+	"github.com/insajin/autopus-bridge/internal/config"
+	"github.com/insajin/autopus-bridge/internal/logger"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+)
+
+const (
+	totalUpSteps = 8
+)
+
+// upProgress tracks the completion state of each step for resume capability.
+type upProgress struct {
+	CompletedSteps []int     `json:"completed_steps"`
+	LastError      string    `json:"last_error,omitempty"`
+	LastStep       int       `json:"last_step"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+// workspaceInfo represents a workspace returned from the API.
+type workspaceInfo struct {
+	ID   string `json:"id"`
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+	Role string `json:"role,omitempty"`
+}
+
+// workspacesResponse represents the API response for listing workspaces.
+type workspacesResponse struct {
+	Success bool            `json:"success"`
+	Data    []workspaceInfo `json:"data"`
+}
+
+// upCmd is the unified startup command.
+var upCmd = &cobra.Command{
+	Use:   "up",
+	Short: "인증, 설정, 연결을 한 번에 수행합니다",
+	Long: `login, setup, connect를 통합한 스마트 명령입니다.
+
+실행 단계:
+  [1/8] 인증 확인
+  [2/8] 토큰 갱신
+  [3/8] 워크스페이스 선택
+  [4/8] AI Provider 감지
+  [5/8] 비즈니스 도구 감지
+  [6/8] 미설치 도구 설치
+  [7/8] 설정 파일 업데이트
+  [8/8] 서버 연결
+
+각 단계가 실패하면 구체적인 해결 방법을 안내합니다.
+재실행 시 완료된 단계는 자동으로 건너뜁니다.`,
+	RunE: runUp,
+}
+
+var (
+	upForceRestart bool
+)
+
+func init() {
+	rootCmd.AddCommand(upCmd)
+
+	upCmd.Flags().BoolVar(&upForceRestart, "force", false, "처음부터 다시 시작합니다 (진행 상태 초기화)")
+}
+
+// runUp executes the unified up command with 6 sequential steps.
+func runUp(cmd *cobra.Command, args []string) error {
+	fmt.Println()
+	fmt.Println(branding.StartupBanner())
+	fmt.Println("========================================")
+	fmt.Println(" 시작")
+	fmt.Println("========================================")
+	fmt.Println()
+
+	// Load or initialize progress
+	progress := loadUpProgress()
+	if upForceRestart {
+		progress = &upProgress{}
+		clearUpProgress()
+	}
+
+	scanner := bufio.NewScanner(os.Stdin)
+
+	// ── Step 1: Auth Check ──
+	var creds *auth.Credentials
+	var err error
+
+	if isStepCompleted(progress, 1) {
+		printStep(1, totalUpSteps, "인증 확인 중...")
+		// Even if step is "completed", we still need to load creds for subsequent steps
+		creds, err = auth.Load()
+		if err != nil || creds == nil || !creds.IsValid() {
+			// Progress says done but creds are invalid - redo this step
+			progress = removeStep(progress, 1)
+			progress = removeStep(progress, 2)
+		} else {
+			printSkip(fmt.Sprintf("이미 인증됨 (%s)", creds.UserEmail))
+		}
+	}
+
+	if !isStepCompleted(progress, 1) {
+		printStep(1, totalUpSteps, "인증 확인 중...")
+		creds, err = stepAuthCheck()
+		if err != nil {
+			printError(fmt.Sprintf("인증 실패: %v", err))
+			saveUpProgress(progress, 1, err.Error())
+			printFixSuggestion("auth", err)
+			return err
+		}
+		markStepCompleted(progress, 1)
+		saveUpProgress(progress, 0, "")
+	}
+
+	// ── Step 2: Token Refresh ──
+	if isStepCompleted(progress, 2) {
+		printStep(2, totalUpSteps, "토큰 갱신 중...")
+		// Re-validate: creds might be stale
+		if creds != nil && creds.IsValid() {
+			printSkip("토큰이 유효합니다")
+		} else {
+			progress = removeStep(progress, 2)
+		}
+	}
+
+	if !isStepCompleted(progress, 2) {
+		printStep(2, totalUpSteps, "토큰 갱신 중...")
+		creds, err = stepTokenRefresh(creds)
+		if err != nil {
+			printError(fmt.Sprintf("토큰 갱신 실패: %v", err))
+			saveUpProgress(progress, 2, err.Error())
+			printFixSuggestion("token_refresh", err)
+			return err
+		}
+		markStepCompleted(progress, 2)
+		saveUpProgress(progress, 0, "")
+	}
+
+	// ── Step 3: Workspace Selection ──
+	if isStepCompleted(progress, 3) {
+		printStep(3, totalUpSteps, "워크스페이스 선택 중...")
+		if creds.WorkspaceID != "" {
+			printSkip(fmt.Sprintf("워크스페이스: %s", creds.WorkspaceSlug))
+		} else {
+			progress = removeStep(progress, 3)
+		}
+	}
+
+	if !isStepCompleted(progress, 3) {
+		printStep(3, totalUpSteps, "워크스페이스 선택 중...")
+		err = stepWorkspaceSelection(creds, scanner)
+		if err != nil {
+			printError(fmt.Sprintf("워크스페이스 선택 실패: %v", err))
+			saveUpProgress(progress, 3, err.Error())
+			printFixSuggestion("workspace", err)
+			return err
+		}
+		markStepCompleted(progress, 3)
+		saveUpProgress(progress, 0, "")
+	}
+
+	// ── Step 4: Provider Detection ──
+	printStep(4, totalUpSteps, "AI Provider 감지 중...")
+	providers := detectProviders()
+	printProviderSummary(providers)
+	markStepCompleted(progress, 4)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 5: Business Tools Detection ──
+	printStep(5, totalUpSteps, "비즈니스 도구 감지 중...")
+	bizTools := detectBusinessTools()
+	printBusinessToolSummary(bizTools)
+	markStepCompleted(progress, 5)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 6: Missing Tools Installation ──
+	printStep(6, totalUpSteps, "미설치 도구 확인 중...")
+	stepInstallMissingTools(bizTools, scanner)
+	markStepCompleted(progress, 6)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 7: Config Update ──
+	printStep(7, totalUpSteps, "설정 파일 업데이트 중...")
+	err = stepConfigUpdate(providers, creds)
+	if err != nil {
+		printError(fmt.Sprintf("설정 업데이트 실패: %v", err))
+		saveUpProgress(progress, 7, err.Error())
+		printFixSuggestion("config", err)
+		return err
+	}
+	markStepCompleted(progress, 7)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 8: Server Connection ──
+	printStep(8, totalUpSteps, "서버 연결 중...")
+
+	// Clear progress file before connecting (connection is the final step)
+	clearUpProgress()
+
+	fmt.Println()
+	// Delegate to the existing connect logic
+	return runConnect(cmd, nil)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Step Implementations
+// ─────────────────────────────────────────────────────────────────────────────
+
+// stepAuthCheck loads existing credentials or triggers Device Auth Flow.
+// Returns valid credentials or error.
+func stepAuthCheck() (*auth.Credentials, error) {
+	creds, err := auth.Load()
+	if err != nil {
+		return nil, fmt.Errorf("인증 정보 로드 실패: %w", err)
+	}
+
+	// Credentials exist and valid
+	if creds != nil && creds.IsValid() {
+		printSuccess(fmt.Sprintf("인증됨: %s", creds.UserEmail))
+		return creds, nil
+	}
+
+	// Credentials exist but expired - will be handled in step 2
+	if creds != nil && creds.AccessToken != "" {
+		printSuccess("인증 정보 발견 (갱신 필요)")
+		return creds, nil
+	}
+
+	// No credentials - trigger Device Auth Flow
+	fmt.Println("  저장된 인증 정보가 없습니다. 기기 인증을 시작합니다...")
+	fmt.Println()
+
+	newCreds, err := performDeviceAuthFlow()
+	if err != nil {
+		return nil, err
+	}
+
+	printSuccess(fmt.Sprintf("인증 성공: %s", newCreds.UserEmail))
+	return newCreds, nil
+}
+
+// stepTokenRefresh refreshes the token if expired. If refresh fails, triggers Device Auth Flow.
+func stepTokenRefresh(creds *auth.Credentials) (*auth.Credentials, error) {
+	if creds == nil {
+		return nil, fmt.Errorf("인증 정보가 없습니다")
+	}
+
+	// Token still valid
+	if creds.IsValid() {
+		printSkip("토큰이 아직 유효합니다")
+		return creds, nil
+	}
+
+	// Try refresh
+	if creds.RefreshToken != "" {
+		fmt.Println("  토큰이 만료되어 갱신을 시도합니다...")
+		if err := auth.RefreshAccessToken(creds); err != nil {
+			logger.Warn().Err(err).Msg("토큰 자동 갱신 실패, 재인증 시도")
+			fmt.Println("  토큰 갱신 실패. 재인증을 시작합니다...")
+			fmt.Println()
+
+			// Refresh failed - trigger full re-auth
+			newCreds, authErr := performDeviceAuthFlow()
+			if authErr != nil {
+				return nil, authErr
+			}
+			printSuccess(fmt.Sprintf("재인증 성공: %s", newCreds.UserEmail))
+			return newCreds, nil
+		}
+
+		printSuccess("토큰 갱신 성공")
+		return creds, nil
+	}
+
+	// No refresh token - need full re-auth
+	fmt.Println("  갱신 토큰이 없습니다. 재인증을 시작합니다...")
+	fmt.Println()
+
+	newCreds, err := performDeviceAuthFlow()
+	if err != nil {
+		return nil, err
+	}
+
+	printSuccess(fmt.Sprintf("재인증 성공: %s", newCreds.UserEmail))
+	return newCreds, nil
+}
+
+// stepWorkspaceSelection fetches workspaces from the API and selects one.
+func stepWorkspaceSelection(creds *auth.Credentials, scanner *bufio.Scanner) error {
+	// If credentials already have a workspace, use it
+	if creds.WorkspaceID != "" && creds.WorkspaceSlug != "" {
+		printSuccess(fmt.Sprintf("워크스페이스: %s (%s)", creds.WorkspaceSlug, creds.WorkspaceID[:8]+"..."))
+		return nil
+	}
+
+	apiBaseURL := getAPIBaseURL()
+	workspaces, err := fetchWorkspaces(apiBaseURL, creds.AccessToken)
+	if err != nil {
+		return fmt.Errorf("워크스페이스 목록 조회 실패: %w", err)
+	}
+
+	if len(workspaces) == 0 {
+		return fmt.Errorf("사용 가능한 워크스페이스가 없습니다. 웹에서 워크스페이스를 생성하세요")
+	}
+
+	var selected workspaceInfo
+
+	if len(workspaces) == 1 {
+		// Auto-select the only workspace
+		selected = workspaces[0]
+		printSuccess(fmt.Sprintf("워크스페이스 자동 선택: %s", selected.Name))
+	} else {
+		// Present list for user selection
+		fmt.Println()
+		fmt.Println("  사용 가능한 워크스페이스:")
+		for i, ws := range workspaces {
+			role := ""
+			if ws.Role != "" {
+				role = fmt.Sprintf(" [%s]", ws.Role)
+			}
+			fmt.Printf("    %d) %s (%s)%s\n", i+1, ws.Name, ws.Slug, role)
+		}
+		fmt.Printf("\n  선택 [1]: ")
+
+		choice := 1
+		if scanner.Scan() {
+			input := strings.TrimSpace(scanner.Text())
+			if input != "" {
+				if _, scanErr := fmt.Sscanf(input, "%d", &choice); scanErr != nil {
+					choice = 1
+				}
+			}
+		}
+
+		if choice < 1 || choice > len(workspaces) {
+			choice = 1
+		}
+		selected = workspaces[choice-1]
+		printSuccess(fmt.Sprintf("워크스페이스 선택: %s", selected.Name))
+	}
+
+	// Update credentials with workspace info
+	creds.WorkspaceID = selected.ID
+	creds.WorkspaceSlug = selected.Slug
+
+	if err := auth.Save(creds); err != nil {
+		return fmt.Errorf("인증 정보 업데이트 실패: %w", err)
+	}
+
+	return nil
+}
+
+// stepConfigUpdate updates the config file with detected providers and workspace info.
+func stepConfigUpdate(providers []providerInfo, creds *auth.Credentials) error {
+	configPath := config.DefaultConfigPath()
+
+	// Determine server URL from existing config or default
+	srvURL := viper.GetString("server.url")
+	if srvURL == "" {
+		srvURL = "wss://api.autopus.co/ws/agent"
+	}
+
+	// Determine work directory from existing config or current directory
+	workDir := viper.GetString("work_dir")
+	if workDir == "" {
+		workDir, _ = os.Getwd()
+	}
+
+	if err := writeSetupConfig(configPath, providers, srvURL, workDir); err != nil {
+		return fmt.Errorf("설정 파일 저장 실패: %w", err)
+	}
+
+	// Reload viper config after writing
+	viper.SetConfigFile(configPath)
+	if err := viper.ReadInConfig(); err != nil {
+		logger.Warn().Err(err).Msg("설정 파일 재로드 실패")
+	}
+
+	printSuccess(fmt.Sprintf("설정 파일 저장: %s", configPath))
+	return nil
+}
+
+// printBusinessToolSummary 비즈니스 도구 감지 결과를 요약 출력합니다.
+func printBusinessToolSummary(tools []businessTool) {
+	installed, total := countTools(tools)
+
+	if installed == total {
+		printSuccess(fmt.Sprintf("%d/%d 도구 설치됨 (건너뜀)", installed, total))
+		return
+	}
+
+	for _, t := range tools {
+		if t.Installed {
+			fmt.Printf("  [v] %-14s %s\n", t.Name, t.Purpose)
+		} else {
+			fmt.Printf("  [ ] %-14s %s\n", t.Name, t.Purpose)
+		}
+	}
+	fmt.Printf("  합계: %d/%d 설치됨\n", installed, total)
+}
+
+// stepInstallMissingTools 미설치 도구 설치를 안내합니다.
+func stepInstallMissingTools(tools []businessTool, scanner *bufio.Scanner) {
+	missing := filterMissing(tools)
+	if len(missing) == 0 {
+		printSkip("모든 도구 설치됨")
+		return
+	}
+
+	// 필수 도구와 권장 도구 분리
+	var essentialMissing, recommendedMissing []businessTool
+	for _, t := range missing {
+		switch t.Category {
+		case toolCategoryEssential:
+			essentialMissing = append(essentialMissing, t)
+		case toolCategoryRecommended:
+			recommendedMissing = append(recommendedMissing, t)
+		}
+	}
+
+	// 필수 도구 미설치 시 강조
+	if len(essentialMissing) > 0 {
+		names := make([]string, 0, len(essentialMissing))
+		for _, t := range essentialMissing {
+			names = append(names, t.Name)
+		}
+		fmt.Printf("  ! 필수 도구 미설치: %s\n", strings.Join(names, ", "))
+	}
+
+	targetTools := append(essentialMissing, recommendedMissing...)
+	if len(targetTools) == 0 {
+		printSkip("필수/권장 도구 모두 설치됨")
+		return
+	}
+
+	fmt.Printf("  %d개 도구를 설치하시겠습니까? (Y/n): ", len(targetTools))
+	if !scanYesNoDefault(scanner, true) {
+		printSkip("설치를 건너뜁니다")
+		return
+	}
+
+	osName := runtime.GOOS
+	for _, t := range targetTools {
+		installCmd, ok := t.InstallCmd[osName]
+		if !ok {
+			fmt.Printf("  ! %-14s %s 자동 설치 미지원\n", t.Name, osName)
+			continue
+		}
+
+		fmt.Printf("  설치 중: %s\n", installCmd)
+		if err := runInstallCommand(installCmd); err != nil {
+			printError(fmt.Sprintf("%s 설치 실패: %v", t.Name, err))
+		} else {
+			printSuccess(fmt.Sprintf("%s 설치 완료", t.Name))
+		}
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Device Auth Flow (reused from login.go logic, non-duplicated)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// performDeviceAuthFlow runs the complete Device Authorization Flow and returns credentials.
+func performDeviceAuthFlow() (*auth.Credentials, error) {
+	apiBaseURL := getAPIBaseURL()
+
+	// Step 1: Request device code
+	deviceResp, err := auth.RequestDeviceCode(apiBaseURL)
+	if err != nil {
+		return nil, fmt.Errorf("디바이스 코드 요청 실패: %w", err)
+	}
+
+	// Step 2: Display auth code
+	fmt.Printf("  인증 코드: %s\n", deviceResp.UserCode)
+	fmt.Println()
+	fmt.Printf("  다음 URL에서 위 코드를 입력하세요:\n")
+	fmt.Printf("  %s\n", deviceResp.VerificationURI)
+	fmt.Println()
+
+	// Step 3: Open browser
+	openURL := deviceResp.VerificationURIComplete
+	if openURL == "" {
+		openURL = deviceResp.VerificationURI
+	}
+	if browserErr := openBrowser(openURL); browserErr != nil {
+		fmt.Printf("  브라우저에서 직접 위 URL을 열어주세요.\n\n")
+	}
+
+	// Step 4: Poll for token
+	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
+	defer cancel()
+
+	expiresAt := time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
+
+	// Spinner goroutine for progress indication
+	stopSpinner := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopSpinner:
+				return
+			case <-ticker.C:
+				remaining := time.Until(expiresAt).Truncate(time.Second)
+				if remaining < 0 {
+					remaining = 0
+				}
+				minutes := int(remaining.Minutes())
+				seconds := int(remaining.Seconds()) % 60
+				fmt.Printf("\r  인증 대기 중... (남은 시간: %d분 %02d초)  ", minutes, seconds)
+			}
+		}
+	}()
+
+	tokenResp, err := auth.PollDeviceToken(ctx, apiBaseURL, deviceResp.DeviceCode, deviceResp.Interval)
+	close(stopSpinner)
+	fmt.Printf("\r%s\r", strings.Repeat(" ", 50))
+
+	if err != nil {
+		return nil, fmt.Errorf("인증 실패: %w", err)
+	}
+
+	// Step 5: Save credentials
+	tokenExpiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+
+	creds := &auth.Credentials{
+		AccessToken:   tokenResp.AccessToken,
+		RefreshToken:  tokenResp.RefreshToken,
+		ExpiresAt:     tokenExpiresAt,
+		ServerURL:     getServerURL(),
+		UserEmail:     tokenResp.UserEmail,
+		WorkspaceID:   tokenResp.WorkspaceID,
+		WorkspaceSlug: tokenResp.WorkspaceSlug,
+	}
+
+	if saveErr := auth.Save(creds); saveErr != nil {
+		return nil, fmt.Errorf("인증 정보 저장 실패: %w", saveErr)
+	}
+
+	return creds, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Workspace API
+// ─────────────────────────────────────────────────────────────────────────────
+
+// fetchWorkspaces retrieves the list of workspaces from the API.
+func fetchWorkspaces(apiBaseURL, accessToken string) ([]workspaceInfo, error) {
+	url := apiBaseURL + "/api/v1/workspaces"
+
+	req, err := http.NewRequest("GET", url, nil)
+	if err != nil {
+		return nil, fmt.Errorf("요청 생성 실패: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("서버 통신 실패: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, fmt.Errorf("인증이 만료되었습니다. 'autopus-bridge login'으로 다시 로그인하세요")
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("워크스페이스 조회 실패 (HTTP %d)", resp.StatusCode)
+	}
+
+	var wsResp workspacesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&wsResp); err != nil {
+		return nil, fmt.Errorf("응답 파싱 실패: %w", err)
+	}
+
+	if !wsResp.Success {
+		return nil, fmt.Errorf("서버가 실패 응답을 반환했습니다")
+	}
+
+	return wsResp.Data, nil
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visual Progress Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+func printStep(step, total int, msg string) {
+	fmt.Printf("\n[%d/%d] %s\n", step, total, msg)
+}
+
+func printSuccess(msg string) {
+	fmt.Printf("  ✓ %s\n", msg)
+}
+
+func printSkip(msg string) {
+	fmt.Printf("  - %s (건너뜀)\n", msg)
+}
+
+func printError(msg string) {
+	fmt.Printf("  ✗ %s\n", msg)
+}
+
+// printProviderSummary displays a compact provider detection summary.
+func printProviderSummary(providers []providerInfo) {
+	anyFound := false
+	for _, p := range providers {
+		if p.HasCLI || p.HasAPIKey {
+			anyFound = true
+			modes := []string{}
+			if p.HasCLI {
+				modes = append(modes, "CLI")
+			}
+			if p.HasAPIKey {
+				modes = append(modes, "API")
+			}
+			printSuccess(fmt.Sprintf("%s (%s)", p.Name, strings.Join(modes, "+")))
+		}
+	}
+
+	if !anyFound {
+		fmt.Println("  ! 감지된 프로바이더가 없습니다.")
+		fmt.Println("    AI CLI를 설치하거나 API 키 환경변수를 설정하세요.")
+		fmt.Println("    export ANTHROPIC_API_KEY=<your-key>")
+	}
+}
+
+// printFixSuggestion prints context-specific fix suggestions for failures.
+func printFixSuggestion(stepName string, err error) {
+	fmt.Println()
+	fmt.Println("  해결 방법:")
+
+	switch stepName {
+	case "auth":
+		fmt.Println("    1. 인터넷 연결을 확인하세요")
+		fmt.Println("    2. Autopus 서버가 실행 중인지 확인하세요")
+		fmt.Println("    3. 'autopus-bridge login'으로 수동 로그인을 시도하세요")
+	case "token_refresh":
+		fmt.Println("    1. 'autopus-bridge logout && autopus-bridge login'으로 재로그인하세요")
+		fmt.Println("    2. 서버 연결 상태를 확인하세요")
+	case "workspace":
+		fmt.Println("    1. 웹 대시보드에서 워크스페이스를 생성하세요")
+		fmt.Println("    2. 계정에 워크스페이스 접근 권한이 있는지 확인하세요")
+		fmt.Println("    3. 'autopus-bridge login'으로 재로그인 후 다시 시도하세요")
+	case "config":
+		fmt.Println("    1. ~/.config/local-agent-bridge/ 디렉토리 쓰기 권한을 확인하세요")
+		fmt.Println("    2. 'autopus-bridge setup'으로 수동 설정을 시도하세요")
+	default:
+		fmt.Println("    1. 'autopus-bridge up --force'로 처음부터 다시 시도하세요")
+		fmt.Println("    2. 문제가 지속되면 'autopus-bridge up -v'로 상세 로그를 확인하세요")
+	}
+
+	fmt.Println()
+	fmt.Println("  재실행 시 완료된 단계는 자동으로 건너뜁니다.")
+	fmt.Println("  처음부터 다시 시작하려면: autopus-bridge up --force")
+	fmt.Println()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Progress Tracking (resume from failed step)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// upProgressFilePath returns the path to the progress tracking file.
+func upProgressFilePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "local-agent-bridge", ".up-progress.json")
+}
+
+// loadUpProgress reads progress from the temp file.
+func loadUpProgress() *upProgress {
+	path := upProgressFilePath()
+	if path == "" {
+		return &upProgress{}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return &upProgress{}
+	}
+
+	var p upProgress
+	if err := json.Unmarshal(data, &p); err != nil {
+		return &upProgress{}
+	}
+
+	// Expire progress older than 1 hour
+	if time.Since(p.UpdatedAt) > 1*time.Hour {
+		clearUpProgress()
+		return &upProgress{}
+	}
+
+	return &p
+}
+
+// saveUpProgress writes progress to the temp file.
+func saveUpProgress(p *upProgress, failedStep int, errMsg string) {
+	path := upProgressFilePath()
+	if path == "" {
+		return
+	}
+
+	p.UpdatedAt = time.Now()
+	if failedStep > 0 {
+		p.LastStep = failedStep
+		p.LastError = errMsg
+	}
+
+	// Ensure config directory exists
+	if err := config.EnsureConfigDir(); err != nil {
+		return
+	}
+
+	data, err := json.MarshalIndent(p, "", "  ")
+	if err != nil {
+		return
+	}
+
+	_ = os.WriteFile(path, data, 0600)
+}
+
+// clearUpProgress removes the progress file.
+func clearUpProgress() {
+	path := upProgressFilePath()
+	if path != "" {
+		_ = os.Remove(path)
+	}
+}
+
+// isStepCompleted checks if a step has been completed in this session.
+func isStepCompleted(p *upProgress, step int) bool {
+	for _, s := range p.CompletedSteps {
+		if s == step {
+			return true
+		}
+	}
+	return false
+}
+
+// markStepCompleted adds a step to the completed list.
+func markStepCompleted(p *upProgress, step int) {
+	if !isStepCompleted(p, step) {
+		p.CompletedSteps = append(p.CompletedSteps, step)
+	}
+}
+
+// removeStep removes a step from the completed list (used when re-validation fails).
+func removeStep(p *upProgress, step int) *upProgress {
+	var newSteps []int
+	for _, s := range p.CompletedSteps {
+		if s != step {
+			newSteps = append(newSteps, s)
+		}
+	}
+	p.CompletedSteps = newSteps
+	return p
+}

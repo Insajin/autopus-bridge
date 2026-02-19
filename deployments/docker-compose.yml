@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  bridge:
+    image: autopus/bridge:latest
+    container_name: autopus-bridge
+    restart: unless-stopped
+    environment:
+      - AUTOPUS_SERVER_URL=${AUTOPUS_SERVER_URL:-https://api.autopus.co}
+      - AUTOPUS_TOKEN=${AUTOPUS_TOKEN}
+      - AUTOPUS_WORKSPACE=${AUTOPUS_WORKSPACE}
+    volumes:
+      - ./workspace:/workspace
+      - bridge-config:/root/.config/local-agent-bridge
+    ports:
+      - "127.0.0.1:8765:8765"  # SSH tunnel endpoint
+    networks:
+      - bridge-net
+    healthcheck:
+      test: ["CMD", "autopus-bridge", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: SSH tunnel sidecar for secure team access
+  ssh-tunnel:
+    image: linuxserver/openssh-server:latest
+    container_name: autopus-bridge-ssh
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=UTC
+      - USER_NAME=${SSH_USER:-bridge}
+      - PUBLIC_KEY_FILE=/config/authorized_keys
+    volumes:
+      - ./ssh-keys:/config/authorized_keys:ro
+      - bridge-config:/bridge-config:ro
+    ports:
+      - "${SSH_PORT:-2222}:2222"
+    networks:
+      - bridge-net
+    depends_on:
+      - bridge
+
+volumes:
+  bridge-config:
+
+networks:
+  bridge-net:
+    driver: bridge
