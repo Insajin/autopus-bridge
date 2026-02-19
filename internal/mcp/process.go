@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -39,8 +38,7 @@ func (p *ProcessInfo) isRunning() bool {
 	if p.cmd == nil || p.cmd.Process == nil {
 		return false
 	}
-	err := p.cmd.Process.Signal(syscall.Signal(0))
-	return err == nil
+	return checkProcessAlive(p.cmd.Process)
 }
 
 // Stop은 MCP 서버 프로세스를 안전하게 종료합니다.
@@ -55,18 +53,18 @@ func (p *ProcessInfo) Stop() error {
 	log.Info().
 		Str("name", p.Name).
 		Int("pid", p.PID).
-		Msg("[mcp] 프로세스 종료 시작 (SIGTERM)")
+		Msg("[mcp] 프로세스 종료 시작")
 
-	// SIGTERM 전송
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	// 종료 시그널 전송 (Unix: SIGTERM, Windows: Kill)
+	if err := sendTermSignal(p.cmd.Process); err != nil {
 		if err.Error() != "os: process already finished" {
-			log.Warn().Err(err).Str("name", p.Name).Msg("[mcp] SIGTERM 전송 실패")
+			log.Warn().Err(err).Str("name", p.Name).Msg("[mcp] 종료 시그널 전송 실패")
 		}
 		p.cleanup()
 		return nil
 	}
 
-	// 유예 시간 후에도 실행 중이면 SIGKILL (데드락 방지: isRunning 사용)
+	// 유예 시간 후에도 실행 중이면 강제 종료 (데드락 방지: isRunning 사용)
 	done := make(chan struct{})
 	go func() {
 		for {
@@ -82,7 +80,7 @@ func (p *ProcessInfo) Stop() error {
 	case <-done:
 		log.Info().Str("name", p.Name).Msg("[mcp] 프로세스 정상 종료")
 	case <-time.After(StopGracePeriod):
-		log.Warn().Str("name", p.Name).Msg("[mcp] SIGKILL 전송")
+		log.Warn().Str("name", p.Name).Msg("[mcp] 강제 종료 (Kill)")
 		_ = p.cmd.Process.Kill()
 	}
 
@@ -124,8 +122,8 @@ func startProcess(ctx context.Context, cfg ServerConfig) (*ProcessInfo, error) {
 		cmd.Dir = cfg.WorkingDir
 	}
 
-	// 프로세스 그룹 설정 (자식 프로세스도 함께 종료)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// 플랫폼별 프로세스 속성 설정 (Unix: 프로세스 그룹, Windows: no-op)
+	cmd.SysProcAttr = setSysProcAttr()
 
 	// stdout/stderr를 로그로 전달
 	cmd.Stdout = &logWriter{name: cfg.Name, level: "info"}
