@@ -4,13 +4,13 @@ go 1.25
 
 require (
 	github.com/anthropics/anthropic-sdk-go v1.20.0
-	github.com/insajin/autopus-agent-protocol v0.1.0
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/charmbracelet/lipgloss v1.1.0
 	github.com/chromedp/chromedp v0.14.2
 	github.com/google/generative-ai-go v0.20.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/insajin/autopus-agent-protocol v0.1.0
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.19.0
@@ -96,5 +96,3 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
-
-replace github.com/insajin/autopus-agent-protocol => ../autopus-agent-protocol
