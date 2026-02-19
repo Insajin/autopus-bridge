@@ -45,8 +45,7 @@ brews:
   - repository:
       owner: insajin
       name: homebrew-tap
-      # 크로스 리포 push를 위해 PAT가 필요합니다.
-      # GitHub repo secrets에 HOMEBREW_TAP_TOKEN을 추가하세요.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/insajin/autopus-bridge
     description: "Autopus Local Agent Bridge - Connect local development agents to Autopus platform"
     license: "MIT"
