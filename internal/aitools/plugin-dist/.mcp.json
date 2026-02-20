@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "autopus": {
-      "command": "autopus-bridge",
-      "args": ["mcp-serve"]
-    }
-  }
-}

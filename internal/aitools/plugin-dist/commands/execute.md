@@ -1,17 +1,46 @@
 ---
-description: Send a task to the Autopus platform for AI agent execution
+description: Execute a task on the Autopus platform using a specified agent
+argument-hint: <task description>
 ---
 
-# Execute Task on Autopus
+# Autopus Task Execution
 
-The user wants to execute a task on the Autopus platform.
+Execute a task on the Autopus platform.
 
-Task description: $ARGUMENTS
+## Workflow
 
-Please run the following command to submit this task:
+### Step 1: Check Connection
+
+First verify the bridge is connected:
+
+```bash
+autopus-bridge status --simple
+```
+
+If disconnected, inform the user to run `autopus-bridge up` first.
+
+### Step 2: Execute Task
+
+Submit the task to the platform:
 
 ```bash
 autopus-bridge execute "$ARGUMENTS"
 ```
 
-After submission, check the task status and report the result to the user.
+### Step 3: Monitor Progress
+
+After submission, check execution status:
+
+```bash
+autopus-bridge status --json
+```
+
+Report the task ID and current status to the user. If the task is still running, poll status periodically until completion.
+
+### Step 4: Report Results
+
+Present the execution results clearly:
+- Task ID
+- Agent used
+- Status (success/failure)
+- Output or error details

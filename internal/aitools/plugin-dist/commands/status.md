@@ -1,15 +1,27 @@
 ---
-description: Check task status on the Autopus platform
+description: Check Autopus bridge connection status and recent task activity
+argument-hint: [--json]
 ---
 
-# Check Autopus Task Status
+# Autopus Status
 
-The user wants to check the status of tasks on the Autopus platform.
+Check the current connection status of the Autopus bridge.
 
-Please run the following command to check task status:
+## Workflow
+
+### Step 1: Get Status
 
 ```bash
-autopus-bridge status $ARGUMENTS
+autopus-bridge status --json
 ```
 
-Present the results clearly, including task state, progress, and any output available.
+### Step 2: Present Results
+
+Parse the JSON output and present:
+- Connection state (connected/disconnected)
+- Server URL
+- Uptime
+- Current task (if any)
+- Tasks completed / failed count
+
+If disconnected, suggest running `autopus-bridge up` to reconnect.

@@ -259,11 +259,11 @@ func TestInstallPluginTo_FileStructure(t *testing.T) {
 	// 임베디드 plugin-dist 디렉토리에 포함된 모든 파일을 검증
 	expectedFiles := []string{
 		".claude-plugin/plugin.json",
-		".mcp.json",
 		"agents/orchestrator.md",
 		"commands/execute.md",
 		"commands/status.md",
-		"skills/autopus-context/SKILL.md",
+		"hooks/hooks.json",
+		"skills/autopus-platform/SKILL.md",
 	}
 
 	for _, relPath := range expectedFiles {
@@ -326,57 +326,36 @@ func TestInstallPluginTo_PluginJSON(t *testing.T) {
 	}
 }
 
-// TestInstallPluginTo_MCPConfig는 설치된 .mcp.json에 autopus 서버 설정이 포함되어 있는지 검증합니다.
-func TestInstallPluginTo_MCPConfig(t *testing.T) {
+// TestInstallPluginTo_HooksJSON은 설치된 hooks.json이 유효한 JSON이고 hooks 필드를 포함하는지 검증합니다.
+func TestInstallPluginTo_HooksJSON(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	if err := InstallPluginTo(tmpDir); err != nil {
 		t.Fatalf("InstallPluginTo() 실패: %v", err)
 	}
 
-	mcpPath := filepath.Join(tmpDir, ".mcp.json")
-	data, err := os.ReadFile(mcpPath)
+	hooksPath := filepath.Join(tmpDir, "hooks", "hooks.json")
+	data, err := os.ReadFile(hooksPath)
 	if err != nil {
-		t.Fatalf(".mcp.json 읽기 실패: %v", err)
+		t.Fatalf("hooks.json 읽기 실패: %v", err)
 	}
 
 	var config map[string]interface{}
 	if err := json.Unmarshal(data, &config); err != nil {
-		t.Fatalf(".mcp.json JSON 파싱 실패: %v", err)
+		t.Fatalf("hooks.json JSON 파싱 실패: %v", err)
 	}
 
-	// mcpServers 필드 존재 확인
-	mcpServers, ok := config["mcpServers"].(map[string]interface{})
+	// hooks 필드 존재 확인
+	hooks, ok := config["hooks"].(map[string]interface{})
 	if !ok {
-		t.Fatal(".mcp.json에 mcpServers 필드가 없거나 올바른 타입이 아닙니다")
+		t.Fatal("hooks.json에 hooks 필드가 없거나 올바른 타입이 아닙니다")
 	}
 
-	// autopus 서버 설정 확인
-	autopus, ok := mcpServers["autopus"].(map[string]interface{})
-	if !ok {
-		t.Fatal(".mcp.json에 autopus 서버 설정이 없습니다")
-	}
-
-	// command 확인
-	command, ok := autopus["command"].(string)
-	if !ok || command == "" {
-		t.Errorf("autopus command가 비어있거나 문자열이 아닙니다: %v", autopus["command"])
-	}
-	if command != "autopus-bridge" {
-		t.Errorf("autopus command = %q, want %q", command, "autopus-bridge")
-	}
-
-	// args 확인
-	args, ok := autopus["args"].([]interface{})
-	if !ok {
-		t.Fatal("autopus args가 배열이 아닙니다")
-	}
-	if len(args) == 0 {
-		t.Error("autopus args가 비어있습니다")
-	}
-	if len(args) > 0 {
-		if firstArg, ok := args[0].(string); !ok || firstArg != "mcp-serve" {
-			t.Errorf("autopus args[0] = %v, want %q", args[0], "mcp-serve")
+	// 필수 hook 이벤트 확인
+	requiredEvents := []string{"SessionStart", "PostToolUse", "Stop"}
+	for _, event := range requiredEvents {
+		if _, ok := hooks[event]; !ok {
+			t.Errorf("hooks.json에 %q 이벤트가 없습니다", event)
 		}
 	}
 }

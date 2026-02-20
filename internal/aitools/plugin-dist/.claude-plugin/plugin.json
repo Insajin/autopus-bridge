@@ -1,7 +1,16 @@
 {
   "name": "autopus",
   "version": "1.0.0",
-  "description": "Autopus Platform Integration - AI agent orchestration and task execution",
-  "author": "Autopus",
-  "homepage": "https://autopus.co"
+  "description": "Autopus platform integration for Claude Code - execute tasks, monitor agents, and access knowledge base through Bridge CLI",
+  "author": {
+    "name": "Insajin"
+  },
+  "homepage": "https://autopus.co",
+  "repository": "https://github.com/insajin/autopus-claude-plugins",
+  "license": "MIT",
+  "keywords": ["autopus", "agent", "task-execution", "workspace", "bridge"],
+  "commands": "./commands/",
+  "agents": "./agents/",
+  "skills": "./skills/",
+  "hooks": "./hooks/hooks.json"
 }

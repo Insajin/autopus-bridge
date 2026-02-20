@@ -1,0 +1,35 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "autopus-bridge status --simple 2>/dev/null || echo 'disconnected'"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "autopus-bridge status --simple 2>/dev/null | grep -q connected && echo 'autopus: file modified' || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "autopus-bridge status --simple 2>/dev/null | grep -q connected && echo 'autopus: session ended' || true"
+          }
+        ]
+      }
+    ]
+  }
+}
