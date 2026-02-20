@@ -13,9 +13,12 @@ import (
 	"time"
 
 	"github.com/insajin/autopus-agent-protocol"
+	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/codegen"
 	"github.com/insajin/autopus-bridge/internal/computeruse"
 	"github.com/insajin/autopus-bridge/internal/mcp"
+	"github.com/insajin/autopus-bridge/internal/mcpserver"
+	"github.com/rs/zerolog"
 )
 
 // MessageHandler는 WebSocket 메시지를 처리하는 인터페이스입니다.
@@ -110,6 +113,18 @@ type Router struct {
 
 	// onError는 에러 발생 시 호출되는 콜백입니다.
 	onError func(err error)
+
+	// MCP 서버(serve) 라이프사이클 관리 (SPEC-AI-003 M3)
+	// mcpServeTokenRefresher는 MCP 서버 BackendClient 생성에 필요한 토큰 갱신기입니다.
+	mcpServeTokenRefresher *auth.TokenRefresher
+	// mcpServeLogger는 MCP 서버 로거입니다.
+	mcpServeLogger zerolog.Logger
+	// mcpServeServer는 현재 실행 중인 MCP 서버입니다.
+	mcpServeServer *mcpserver.Server
+	// mcpServeCancel은 MCP 서버 goroutine을 취소하는 함수입니다.
+	mcpServeCancel context.CancelFunc
+	// mcpServeMu는 MCP 서버 상태 접근을 보호하는 뮤텍스입니다.
+	mcpServeMu sync.Mutex
 }
 
 // RouterOption은 Router 설정 옵션입니다.
@@ -199,6 +214,14 @@ func WithCodegenSandboxBaseDir(dir string) RouterOption {
 	}
 }
 
+// WithMCPServeAuth는 MCP 서버(serve) 시작에 필요한 인증 정보를 설정합니다 (SPEC-AI-003 M3).
+func WithMCPServeAuth(tokenRefresher *auth.TokenRefresher, logger zerolog.Logger) RouterOption {
+	return func(r *Router) {
+		r.mcpServeTokenRefresher = tokenRefresher
+		r.mcpServeLogger = logger
+	}
+}
+
 // NewRouter는 새로운 메시지 라우터를 생성합니다.
 func NewRouter(client *Client, opts ...RouterOption) *Router {
 	r := &Router{
@@ -212,6 +235,9 @@ func NewRouter(client *Client, opts ...RouterOption) *Router {
 
 	// 기본 핸들러 등록
 	r.registerDefaultHandlers()
+
+	// SPEC-AI-003 M3 T-26: 하트비트에 MCP 서버 상태 포함
+	client.SetHeartbeatEnricher(r.MCPServeStatus)
 
 	return r
 }
@@ -248,6 +274,10 @@ func (r *Router) registerDefaultHandlers() {
 	// MCP Codegen/Deploy 핸들러 (SPEC-SELF-EXPAND-001)
 	r.RegisterHandler(ws.AgentMsgMCPCodegenRequest, r.handleMCPCodegenRequest)
 	r.RegisterHandler(ws.AgentMsgMCPDeploy, r.handleMCPDeploy)
+
+	// MCP 서버(serve) 라이프사이클 핸들러 (SPEC-AI-003 M3)
+	r.RegisterHandler(ws.AgentMsgMCPServeStart, r.handleMCPServeStart)
+	r.RegisterHandler(ws.AgentMsgMCPServeStop, r.handleMCPServeStop)
 }
 
 // RegisterHandler는 메시지 타입에 대한 핸들러를 등록합니다.
@@ -1035,4 +1065,136 @@ func (r *Router) SendProjectContext(rootDir string) error {
 	log.Printf("[skill-v2] 프로젝트 컨텍스트 전송 완료 (root=%s, langs=%v, frameworks=%v)",
 		ctx.ProjectRoot, ctx.TechStack.Languages, ctx.TechStack.Frameworks)
 	return nil
+}
+
+// handleMCPServeStart는 서버로부터 수신한 MCP 서버(serve) 시작 요청을 처리합니다 (SPEC-AI-003 M3 T-24).
+// BackendClient를 생성하고 MCP 서버를 stdio 트랜스포트로 시작합니다.
+func (r *Router) handleMCPServeStart(ctx context.Context, msg ws.AgentMessage) error {
+	var req ws.MCPServeStartPayload
+	if err := json.Unmarshal(msg.Payload, &req); err != nil {
+		return r.sendMCPServeResult(msg.ID, "error", "", fmt.Sprintf("mcp_serve_start 페이로드 파싱 실패: %v", err))
+	}
+
+	// 인증 인프라 확인
+	if r.mcpServeTokenRefresher == nil {
+		log.Printf("[mcp-serve] TokenRefresher가 설정되지 않음, 요청 무시")
+		return r.sendMCPServeResult(msg.ID, "error", "", "MCP 서버 인증 정보가 설정되지 않음")
+	}
+
+	r.mcpServeMu.Lock()
+	defer r.mcpServeMu.Unlock()
+
+	// 이미 실행 중인 서버가 있는지 확인
+	if r.mcpServeServer != nil {
+		log.Printf("[mcp-serve] MCP 서버가 이미 실행 중입니다")
+		return r.sendMCPServeResult(msg.ID, "error", "", "MCP 서버가 이미 실행 중입니다")
+	}
+
+	// BackendClient 생성
+	backendURL := req.BackendURL
+	if backendURL == "" {
+		backendURL = "https://api.autopus.co"
+	}
+	backendClient := mcpserver.NewBackendClient(
+		backendURL,
+		r.mcpServeTokenRefresher,
+		30*time.Second,
+		r.mcpServeLogger,
+	)
+
+	// MCP 서버 생성
+	srv := mcpserver.NewServer(backendClient, r.mcpServeLogger)
+	r.mcpServeServer = srv
+
+	// MCP 서버를 goroutine에서 시작 (stdio 블로킹)
+	serveCtx, cancel := context.WithCancel(ctx)
+	r.mcpServeCancel = cancel
+
+	go func() {
+		log.Printf("[mcp-serve] MCP 서버 시작")
+		if err := srv.Start(); err != nil {
+			log.Printf("[mcp-serve] MCP 서버 종료: %v", err)
+		}
+
+		// 서버 종료 시 상태 정리
+		r.mcpServeMu.Lock()
+		r.mcpServeServer = nil
+		r.mcpServeCancel = nil
+		r.mcpServeMu.Unlock()
+
+		// 컨텍스트 취소 (이미 취소된 경우 no-op)
+		cancel()
+		_ = serveCtx // serveCtx는 향후 graceful shutdown에 활용 가능
+	}()
+
+	log.Printf("[mcp-serve] MCP 서버 시작 완료 (backend_url=%s)", backendURL)
+	return r.sendMCPServeResult(msg.ID, "started", "MCP 서버가 시작되었습니다", "")
+}
+
+// handleMCPServeStop은 서버로부터 수신한 MCP 서버(serve) 중지 요청을 처리합니다 (SPEC-AI-003 M3 T-25).
+func (r *Router) handleMCPServeStop(ctx context.Context, msg ws.AgentMessage) error {
+	var req ws.MCPServeStopPayload
+	if err := json.Unmarshal(msg.Payload, &req); err != nil {
+		return r.sendMCPServeResult(msg.ID, "error", "", fmt.Sprintf("mcp_serve_stop 페이로드 파싱 실패: %v", err))
+	}
+
+	r.mcpServeMu.Lock()
+	defer r.mcpServeMu.Unlock()
+
+	// 실행 중인 서버가 없는 경우
+	if r.mcpServeServer == nil {
+		log.Printf("[mcp-serve] 실행 중인 MCP 서버가 없습니다")
+		return r.sendMCPServeResult(msg.ID, "stopped", "실행 중인 MCP 서버가 없습니다", "")
+	}
+
+	// 컨텍스트 취소를 통한 graceful shutdown
+	if r.mcpServeCancel != nil {
+		r.mcpServeCancel()
+	}
+
+	// 리소스 정리
+	r.mcpServeServer = nil
+	r.mcpServeCancel = nil
+
+	reason := req.Reason
+	if reason == "" {
+		reason = "서버 중지 요청"
+	}
+	log.Printf("[mcp-serve] MCP 서버 중지 완료 (reason=%s)", reason)
+	return r.sendMCPServeResult(msg.ID, "stopped", "MCP 서버가 중지되었습니다", "")
+}
+
+// sendMCPServeResult는 MCP 서버(serve) 결과 메시지를 서버로 전송합니다 (SPEC-AI-003 M3).
+func (r *Router) sendMCPServeResult(msgID, status, message, errMsg string) error {
+	resultPayload := ws.MCPServeResultPayload{
+		Status:  status,
+		Message: message,
+		Error:   errMsg,
+	}
+
+	payload, err := json.Marshal(resultPayload)
+	if err != nil {
+		return fmt.Errorf("mcp_serve_result 직렬화 실패: %w", err)
+	}
+
+	respMsg := ws.AgentMessage{
+		Type:      ws.AgentMsgMCPServeResult,
+		ID:        msgID,
+		Timestamp: time.Now(),
+		Payload:   payload,
+	}
+
+	return r.client.Send(respMsg)
+}
+
+// MCPServeStatus는 현재 MCP 서버(serve) 상태를 반환합니다 (SPEC-AI-003 M3 T-26).
+// 하트비트 enricher 콜백으로 사용됩니다.
+func (r *Router) MCPServeStatus() string {
+	r.mcpServeMu.Lock()
+	defer r.mcpServeMu.Unlock()
+
+	if r.mcpServeServer != nil {
+		return "running"
+	}
+	return "stopped"
 }

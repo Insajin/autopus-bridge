@@ -6,7 +6,28 @@ before:
     - go mod tidy
 
 builds:
-  - env:
+  # autopus-bridge: 메인 CLI 바이너리
+  - id: autopus-bridge
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.ShortCommit}}
+      - -X main.date={{.Date}}
+
+  # autopus-mcp-server: MCP 서버 독립 바이너리 (Claude Code 플러그인용)
+  - id: autopus-mcp-server
+    binary: autopus-mcp-server
+    main: ./cmd/mcp-server
+    env:
       - CGO_ENABLED=0
     goos:
       - linux
@@ -22,9 +43,25 @@ builds:
       - -X main.date={{.Date}}
 
 archives:
-  - formats:
+  # autopus-bridge 아카이브
+  - id: autopus-bridge
+    builds:
+      - autopus-bridge
+    formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+  # autopus-mcp-server 아카이브
+  - id: autopus-mcp-server
+    builds:
+      - autopus-mcp-server
+    formats:
+      - tar.gz
+    name_template: "autopus-mcp-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     format_overrides:
       - goos: windows
         formats:
@@ -42,7 +79,10 @@ changelog:
       - '^ci:'
 
 brews:
-  - repository:
+  # autopus-bridge Homebrew 포뮬러
+  - ids:
+      - autopus-bridge
+    repository:
       owner: insajin
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
@@ -53,3 +93,18 @@ brews:
       bin.install "autopus-bridge"
     test: |
       system "#{bin}/autopus-bridge", "version"
+
+  # autopus-mcp-server Homebrew 포뮬러
+  - ids:
+      - autopus-mcp-server
+    repository:
+      owner: insajin
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/insajin/autopus-bridge
+    description: "Autopus MCP Server - Claude Code MCP plugin for Autopus platform integration"
+    license: "MIT"
+    install: |
+      bin.install "autopus-mcp-server"
+    test: |
+      assert_predicate bin/"autopus-mcp-server", :exist?

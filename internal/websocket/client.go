@@ -149,6 +149,9 @@ type Client struct {
 
 	// tokenRefreshFn은 재연결 전 토큰을 갱신하는 콜백입니다.
 	tokenRefreshFn func() (string, error)
+
+	// heartbeatEnricher는 하트비트 전송 시 추가 정보를 제공하는 콜백입니다 (SPEC-AI-003 M3 T-26).
+	heartbeatEnricher func() (mcpServeStatus string)
 }
 
 // ClientOption은 Client 설정 옵션입니다.
@@ -583,9 +586,12 @@ func (c *Client) heartbeatLoop(ctx context.Context) {
 				return
 			}
 
-			// 하트비트 전송
+			// 하트비트 전송 (SPEC-AI-003 M3 T-26: MCP 서버 상태 포함)
 			payload := ws.AgentHeartbeatPayload{
 				Timestamp: time.Now(),
+			}
+			if c.heartbeatEnricher != nil {
+				payload.MCPServeStatus = c.heartbeatEnricher()
 			}
 			if err := c.sendMessage(ws.AgentMsgHeartbeat, payload); err != nil {
 				// 전송 실패 시 재연결 시도
@@ -679,6 +685,11 @@ func (c *Client) UpdateToken(token string) {
 // SetTokenRefreshFunc은 재연결 전 토큰을 갱신하는 콜백을 설정합니다.
 func (c *Client) SetTokenRefreshFunc(fn func() (string, error)) {
 	c.tokenRefreshFn = fn
+}
+
+// SetHeartbeatEnricher는 하트비트 전송 시 MCP 서버 상태를 포함하는 콜백을 설정합니다 (SPEC-AI-003 M3 T-26).
+func (c *Client) SetHeartbeatEnricher(fn func() string) {
+	c.heartbeatEnricher = fn
 }
 
 // handleDisconnect는 연결 끊김을 처리하고 재연결을 시도합니다.
