@@ -80,6 +80,11 @@ type ProviderConfig struct {
 	// CLITimeout은 CLI 실행 타임아웃(초)입니다.
 	// 기본값: 300 (5분)
 	CLITimeout int `mapstructure:"cli_timeout"`
+	// ApprovalPolicy는 App Server 모드의 승인 정책입니다 ("auto-approve", "deny-all").
+	// 기본값: "auto-approve"
+	ApprovalPolicy string `mapstructure:"approval_policy"`
+	// ChatGPTAuthEnv는 ChatGPT 인증 토큰을 가져올 환경변수 이름입니다.
+	ChatGPTAuthEnv string `mapstructure:"chatgpt_auth_env"`
 }
 
 // LoggingConfig는 로깅 설정입니다.
@@ -161,6 +166,28 @@ func (p *ProviderConfig) GetCLITimeout() int {
 	return p.CLITimeout
 }
 
+// GetApprovalPolicy는 승인 정책을 반환합니다.
+// 설정되지 않은 경우 기본값 "auto-approve"를 반환합니다.
+func (p *ProviderConfig) GetApprovalPolicy() string {
+	if p.ApprovalPolicy == "" {
+		return "auto-approve"
+	}
+	return p.ApprovalPolicy
+}
+
+// GetChatGPTAuthKey는 ChatGPT 인증 토큰을 환경변수에서 가져옵니다.
+func (p *ProviderConfig) GetChatGPTAuthKey() string {
+	if p.ChatGPTAuthEnv == "" {
+		return ""
+	}
+	return os.Getenv(p.ChatGPTAuthEnv)
+}
+
+// HasChatGPTAuth는 ChatGPT 인증이 설정되어 있는지 확인합니다.
+func (p *ProviderConfig) HasChatGPTAuth() bool {
+	return p.GetChatGPTAuthKey() != ""
+}
+
 // IsCLIAvailable은 CLI 바이너리가 사용 가능한지 확인합니다.
 func (p *ProviderConfig) IsCLIAvailable() bool {
 	cliPath := p.GetCLIPath()
@@ -180,6 +207,9 @@ func (p *ProviderConfig) IsAvailable() bool {
 	case "hybrid":
 		// 하이브리드 모드는 CLI 또는 API 중 하나만 있으면 됨
 		return p.IsCLIAvailable() || p.HasAPIKey()
+	case "app-server":
+		// App Server 모드는 CLI 바이너리와 인증(API Key 또는 ChatGPT 토큰)이 필요
+		return p.IsCLIAvailable() && (p.HasAPIKey() || p.HasChatGPTAuth())
 	default:
 		return false
 	}
@@ -219,13 +249,22 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("gemini CLI 모드가 설정되었지만 gemini 바이너리를 찾을 수 없습니다: %s", c.Providers.Gemini.GetCLIPath())
 	}
 
-	// Codex 모드 검증
+	// Codex 모드 검증 (app-server 추가)
 	codexMode := c.Providers.Codex.GetMode()
-	if !validModes[codexMode] {
-		return fmt.Errorf("유효하지 않은 Codex 모드: %s (api, cli, hybrid 중 하나)", codexMode)
+	validCodexModes := map[string]bool{
+		"api":        true,
+		"cli":        true,
+		"hybrid":     true,
+		"app-server": true,
+	}
+	if !validCodexModes[codexMode] {
+		return fmt.Errorf("유효하지 않은 Codex 모드: %s (api, cli, hybrid, app-server 중 하나)", codexMode)
 	}
 	if codexMode == "cli" && !c.Providers.Codex.IsCLIAvailable() {
 		return fmt.Errorf("codex CLI 모드가 설정되었지만 codex 바이너리를 찾을 수 없습니다: %s", c.Providers.Codex.GetCLIPath())
+	}
+	if codexMode == "app-server" && !c.Providers.Codex.IsCLIAvailable() {
+		return fmt.Errorf("codex app-server 모드가 설정되었지만 codex 바이너리를 찾을 수 없습니다: %s", c.Providers.Codex.GetCLIPath())
 	}
 
 	// 로그 레벨 검증

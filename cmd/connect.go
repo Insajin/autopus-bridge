@@ -411,11 +411,13 @@ func initializeProviders(ctx context.Context, cfg *config.Config) (*provider.Reg
 		GeminiCLIPath:      cfg.Providers.Gemini.GetCLIPath(),
 		GeminiCLITimeout:   cfg.Providers.Gemini.GetCLITimeout(),
 
-		CodexAPIKey:       cfg.Providers.Codex.GetAPIKey(),
-		CodexDefaultModel: cfg.Providers.Codex.DefaultModel,
-		CodexMode:         cfg.Providers.Codex.GetMode(),
-		CodexCLIPath:      cfg.Providers.Codex.GetCLIPath(),
-		CodexCLITimeout:   cfg.Providers.Codex.GetCLITimeout(),
+		CodexAPIKey:         cfg.Providers.Codex.GetAPIKey(),
+		CodexDefaultModel:   cfg.Providers.Codex.DefaultModel,
+		CodexMode:           cfg.Providers.Codex.GetMode(),
+		CodexCLIPath:        cfg.Providers.Codex.GetCLIPath(),
+		CodexCLITimeout:     cfg.Providers.Codex.GetCLITimeout(),
+		CodexApprovalPolicy: cfg.Providers.Codex.GetApprovalPolicy(),
+		CodexChatGPTAuthEnv: cfg.Providers.Codex.ChatGPTAuthEnv,
 	}
 
 	return provider.InitializeRegistry(ctx, registryConfig)

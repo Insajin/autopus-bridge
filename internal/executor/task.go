@@ -304,19 +304,22 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 		WorkDir:   task.WorkDir,
 	}
 
-	// ClaudeCLIProvider인 경우 스트리밍 실행, 아니면 기존 방식
+	// 스트리밍 지원 프로바이더인 경우 스트리밍 실행, 아니면 기존 방식
 	var resp *provider.ExecuteResponse
-	if cliProv, ok := prov.(*provider.ClaudeCLIProvider); ok {
-		resp, err = cliProv.ExecuteStreaming(execCtx, req, func(textDelta, accumulatedText string) {
-			_ = e.sender.SendTaskProgress(ws.TaskProgressPayload{
-				ExecutionID:     task.ExecutionID,
-				Progress:        50,
-				Message:         "스트리밍 중...",
-				Type:            "text",
-				TextDelta:       textDelta,
-				AccumulatedText: accumulatedText,
-			})
+	streamCallback := func(textDelta, accumulatedText string) {
+		_ = e.sender.SendTaskProgress(ws.TaskProgressPayload{
+			ExecutionID:     task.ExecutionID,
+			Progress:        50,
+			Message:         "스트리밍 중...",
+			Type:            "text",
+			TextDelta:       textDelta,
+			AccumulatedText: accumulatedText,
 		})
+	}
+	if cliProv, ok := prov.(*provider.ClaudeCLIProvider); ok {
+		resp, err = cliProv.ExecuteStreaming(execCtx, req, streamCallback)
+	} else if appSrvProv, ok := prov.(*provider.CodexAppServerProvider); ok {
+		resp, err = appSrvProv.ExecuteStreaming(execCtx, req, streamCallback)
 	} else {
 		resp, err = prov.Execute(execCtx, req)
 	}

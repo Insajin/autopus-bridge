@@ -4,6 +4,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -192,6 +193,10 @@ type RegistryConfig struct {
 	CodexCLIPath string
 	// CodexCLITimeout은 Codex CLI 실행 타임아웃(초)입니다.
 	CodexCLITimeout int
+	// CodexApprovalPolicy는 App Server 모드의 승인 정책입니다.
+	CodexApprovalPolicy string
+	// CodexChatGPTAuthEnv는 ChatGPT 인증 토큰 환경변수명입니다.
+	CodexChatGPTAuthEnv string
 }
 
 // InitializeRegistry는 설정에 따라 프로바이더를 초기화하고 레지스트리에 등록합니다.
@@ -487,8 +492,11 @@ func initializeCodexProvider(cfg RegistryConfig, logger zerolog.Logger) (Provide
 	case "hybrid":
 		return initializeCodexHybridProvider(cfg, cliPath, cliTimeout, logger)
 
+	case "app-server":
+		return initializeCodexAppServerProvider(cfg, cliPath, logger)
+
 	default:
-		return nil, fmt.Errorf("지원하지 않는 Codex 모드: %s (api, cli, hybrid 중 하나)", mode)
+		return nil, fmt.Errorf("지원하지 않는 Codex 모드: %s (api, cli, hybrid, app-server 중 하나)", mode)
 	}
 }
 
@@ -540,6 +548,46 @@ func initializeCodexHybridProvider(cfg RegistryConfig, cliPath string, cliTimeou
 		apiOpts,
 		WithCodexHybridLogger(logger),
 	)
+}
+
+// initializeCodexAppServerProvider는 App Server 기반 Codex 프로바이더를 초기화합니다.
+func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger zerolog.Logger) (*CodexAppServerProvider, error) {
+	// 인증 방법 및 키 결정
+	// 우선순위: API 키 우선, ChatGPT 인증 차순
+	authMethod := ""
+	authKey := ""
+
+	if cfg.CodexAPIKey != "" {
+		authMethod = "apiKey"
+		authKey = cfg.CodexAPIKey
+	} else if cfg.CodexChatGPTAuthEnv != "" {
+		chatGPTKey := os.Getenv(cfg.CodexChatGPTAuthEnv)
+		if chatGPTKey != "" {
+			authMethod = "chatgptAuthTokens"
+			authKey = chatGPTKey
+		}
+	}
+
+	if authKey == "" {
+		return nil, fmt.Errorf("%w: app-server 모드에는 API 키 또는 ChatGPT 인증이 필요합니다", ErrNoAPIKey)
+	}
+
+	approvalPolicy := cfg.CodexApprovalPolicy
+	if approvalPolicy == "" {
+		approvalPolicy = "auto-approve"
+	}
+
+	opts := []CodexAppServerOption{
+		WithAppServerLogger(logger),
+		WithAppServerApprovalPolicy(approvalPolicy),
+		WithAppServerAuth(authMethod, authKey),
+	}
+
+	if cfg.CodexDefaultModel != "" {
+		// Note: model is set per-request, not at provider level for app-server
+	}
+
+	return NewCodexAppServerProvider(cliPath, opts...)
 }
 
 // Execute는 모델에 맞는 프로바이더를 찾아 실행합니다.
