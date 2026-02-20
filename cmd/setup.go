@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/insajin/autopus-bridge/internal/aitools"
 	"github.com/insajin/autopus-bridge/internal/branding"
 	"github.com/insajin/autopus-bridge/internal/config"
 	"github.com/spf13/cobra"
@@ -524,6 +525,27 @@ func printSetupSummary(providers []providerInfo, serverURL, workDir, configPath 
 	}
 	fmt.Println()
 
+	// MCP 설정 상태
+	fmt.Println("\nMCP 설정 상태:")
+	claudeInfo, _ := aitools.DetectClaudeCode()
+	codexInfo, _ := aitools.DetectCodexCLI()
+	geminiInfo, _ := aitools.DetectGeminiCLI()
+
+	if claudeInfo != nil && claudeInfo.Installed {
+		if aitools.IsPluginInstalled() {
+			fmt.Println("  [v] Claude Code: 플러그인 설치됨")
+		} else {
+			fmt.Println("  [ ] Claude Code: 플러그인 미설치")
+		}
+	}
+	if codexInfo != nil && codexInfo.Installed {
+		fmt.Println("  [v] Codex CLI: 감지됨")
+	}
+	if geminiInfo != nil && geminiInfo.Installed {
+		fmt.Println("  [v] Gemini CLI: 감지됨")
+	}
+	fmt.Println()
+
 	// 서버 URL
 	fmt.Printf("서버 URL:     %s\n", serverURL)
 	fmt.Printf("작업 디렉토리: %s\n", workDir)
@@ -533,7 +555,8 @@ func printSetupSummary(providers []providerInfo, serverURL, workDir, configPath 
 	// 다음 단계 안내
 	fmt.Println("다음 단계:")
 	fmt.Println("  1. autopus-bridge login    - Autopus 서버에 로그인")
-	fmt.Println("  2. autopus-bridge connect  - 서버에 연결하여 작업 대기")
+	fmt.Println("  2. autopus-bridge up       - MCP 설정 포함 통합 시작")
+	fmt.Println("  3. autopus-bridge connect  - 서버에 연결하여 작업 대기")
 	fmt.Println()
 
 	if !hasProvider {

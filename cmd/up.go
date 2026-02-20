@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/insajin/autopus-bridge/internal/aitools"
 	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/branding"
 	"github.com/insajin/autopus-bridge/internal/config"
@@ -24,7 +25,7 @@ import (
 )
 
 const (
-	totalUpSteps = 8
+	totalUpSteps = 9
 )
 
 // upProgress tracks the completion state of each step for resume capability.
@@ -56,14 +57,15 @@ var upCmd = &cobra.Command{
 	Long: `login, setup, connect를 통합한 스마트 명령입니다.
 
 실행 단계:
-  [1/8] 인증 확인
-  [2/8] 토큰 갱신
-  [3/8] 워크스페이스 선택
-  [4/8] AI Provider 감지
-  [5/8] 비즈니스 도구 감지
-  [6/8] 미설치 도구 설치
-  [7/8] 설정 파일 업데이트
-  [8/8] 서버 연결
+  [1/9] 인증 확인
+  [2/9] 토큰 갱신
+  [3/9] 워크스페이스 선택
+  [4/9] AI Provider 감지
+  [5/9] 비즈니스 도구 감지
+  [6/9] 미설치 도구 설치
+  [7/9] AI 도구 MCP 설정
+  [8/9] 설정 파일 업데이트
+  [9/9] 서버 연결
 
 각 단계가 실패하면 구체적인 해결 방법을 안내합니다.
 재실행 시 완료된 단계는 자동으로 건너뜁니다.`,
@@ -195,20 +197,26 @@ func runUp(cmd *cobra.Command, args []string) error {
 	markStepCompleted(progress, 6)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 7: Config Update ──
-	printStep(7, totalUpSteps, "설정 파일 업데이트 중...")
-	err = stepConfigUpdate(providers, creds)
-	if err != nil {
-		printError(fmt.Sprintf("설정 업데이트 실패: %v", err))
-		saveUpProgress(progress, 7, err.Error())
-		printFixSuggestion("config", err)
-		return err
-	}
+	// ── Step 7: AI Tool MCP Configuration ──
+	printStep(7, totalUpSteps, "AI 도구 MCP 설정 중...")
+	stepAIToolMCPConfig(providers, scanner)
 	markStepCompleted(progress, 7)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 8: Server Connection ──
-	printStep(8, totalUpSteps, "서버 연결 중...")
+	// ── Step 8: Config Update ──
+	printStep(8, totalUpSteps, "설정 파일 업데이트 중...")
+	err = stepConfigUpdate(providers, creds)
+	if err != nil {
+		printError(fmt.Sprintf("설정 업데이트 실패: %v", err))
+		saveUpProgress(progress, 8, err.Error())
+		printFixSuggestion("config", err)
+		return err
+	}
+	markStepCompleted(progress, 8)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 9: Server Connection ──
+	printStep(9, totalUpSteps, "서버 연결 중...")
 
 	// Clear progress file before connecting (connection is the final step)
 	clearUpProgress()
@@ -469,6 +477,64 @@ func stepInstallMissingTools(tools []businessTool, scanner *bufio.Scanner) {
 		} else {
 			printSuccess(fmt.Sprintf("%s 설치 완료", t.Name))
 		}
+	}
+}
+
+// stepAIToolMCPConfig는 감지된 AI CLI 도구에 Autopus MCP를 설정합니다.
+func stepAIToolMCPConfig(providers []providerInfo, scanner *bufio.Scanner) {
+	configured := 0
+
+	for _, p := range providers {
+		if !p.HasCLI {
+			continue
+		}
+
+		switch p.Name {
+		case "Claude":
+			fmt.Printf("  Claude Code MCP 자동 설정을 진행할까요? (Y/n): ")
+			if scanYesNoDefault(scanner, true) {
+				if err := aitools.ConfigureClaudeCodeMCP(""); err != nil {
+					printError(fmt.Sprintf("Claude Code MCP 설정 실패: %v", err))
+				} else {
+					printSuccess("Claude Code MCP 설정 완료 (~/.claude/.mcp.json)")
+					configured++
+				}
+			} else {
+				printSkip("Claude Code MCP 설정 건너뜀")
+			}
+
+		case "Codex":
+			fmt.Printf("  Codex CLI MCP 자동 설정을 진행할까요? (Y/n): ")
+			if scanYesNoDefault(scanner, true) {
+				if err := aitools.ConfigureCodexMCP(); err != nil {
+					printError(fmt.Sprintf("Codex CLI MCP 설정 실패: %v", err))
+				} else {
+					printSuccess("Codex CLI MCP 설정 완료 (~/.codex/config.toml)")
+					configured++
+				}
+			} else {
+				printSkip("Codex CLI MCP 설정 건너뜀")
+			}
+
+		case "Gemini":
+			fmt.Printf("  Gemini CLI MCP 자동 설정을 진행할까요? (Y/n): ")
+			if scanYesNoDefault(scanner, true) {
+				if err := aitools.ConfigureGeminiMCP(); err != nil {
+					printError(fmt.Sprintf("Gemini CLI MCP 설정 실패: %v", err))
+				} else {
+					printSuccess("Gemini CLI MCP 설정 완료 (~/.gemini/settings.json)")
+					configured++
+				}
+			} else {
+				printSkip("Gemini CLI MCP 설정 건너뜀")
+			}
+		}
+	}
+
+	if configured == 0 {
+		fmt.Println("  감지된 AI CLI가 없거나 MCP 설정을 건너뛰었습니다.")
+	} else {
+		printSuccess(fmt.Sprintf("%d개 AI 도구 MCP 설정 완료", configured))
 	}
 }
 
