@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/insajin/autopus-bridge/internal/auth"
@@ -159,10 +160,18 @@ type ListAgentsResponse struct {
 }
 
 // ListAgents는 사용 가능한 에이전트 목록을 조회합니다.
-func (c *BackendClient) ListAgents(ctx context.Context, workspaceID string) (*ListAgentsResponse, error) {
+// opts는 선택적 파라미터입니다: 첫 번째 값은 filter 문자열로 사용됩니다.
+func (c *BackendClient) ListAgents(ctx context.Context, workspaceID string, opts ...string) (*ListAgentsResponse, error) {
 	path := "/api/v1/agents"
+	var queryParams []string
 	if workspaceID != "" {
-		path += "?workspace_id=" + workspaceID
+		queryParams = append(queryParams, "workspace_id="+workspaceID)
+	}
+	if len(opts) > 0 && opts[0] != "" {
+		queryParams = append(queryParams, "filter="+opts[0])
+	}
+	if len(queryParams) > 0 {
+		path += "?" + strings.Join(queryParams, "&")
 	}
 
 	resp, err := c.Do(ctx, http.MethodGet, path, nil)
@@ -258,6 +267,9 @@ func (c *BackendClient) ManageWorkspace(ctx context.Context, req *ManageWorkspac
 	var path string
 
 	switch req.Action {
+	case "get":
+		method = http.MethodGet
+		path = "/api/v1/workspaces/" + req.WorkspaceID
 	case "list":
 		method = http.MethodGet
 		path = "/api/v1/workspaces"

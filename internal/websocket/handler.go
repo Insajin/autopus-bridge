@@ -1128,7 +1128,7 @@ func (r *Router) handleMCPServeStart(ctx context.Context, msg ws.AgentMessage) e
 	}()
 
 	log.Printf("[mcp-serve] MCP 서버 시작 완료 (backend_url=%s)", backendURL)
-	return r.sendMCPServeResult(msg.ID, "started", "MCP 서버가 시작되었습니다", "")
+	return r.sendMCPServeReady(msg.ID, "started", "MCP 서버가 시작되었습니다")
 }
 
 // handleMCPServeStop은 서버로부터 수신한 MCP 서버(serve) 중지 요청을 처리합니다 (SPEC-AI-003 M3 T-25).
@@ -1164,7 +1164,31 @@ func (r *Router) handleMCPServeStop(ctx context.Context, msg ws.AgentMessage) er
 	return r.sendMCPServeResult(msg.ID, "stopped", "MCP 서버가 중지되었습니다", "")
 }
 
+// sendMCPServeReady는 MCP 서버(serve) 시작 완료 메시지를 서버로 전송합니다 (SPEC-AI-003 REQ-INTEGRATION-001).
+// mcp_serve_start 성공 시에만 사용하며, 에러 응답은 sendMCPServeResult를 사용합니다.
+func (r *Router) sendMCPServeReady(msgID, status, message string) error {
+	resultPayload := ws.MCPServeResultPayload{
+		Status:  status,
+		Message: message,
+	}
+
+	payload, err := json.Marshal(resultPayload)
+	if err != nil {
+		return fmt.Errorf("mcp_serve_ready 직렬화 실패: %w", err)
+	}
+
+	respMsg := ws.AgentMessage{
+		Type:      ws.AgentMsgMCPServeReady,
+		ID:        msgID,
+		Timestamp: time.Now(),
+		Payload:   payload,
+	}
+
+	return r.client.Send(respMsg)
+}
+
 // sendMCPServeResult는 MCP 서버(serve) 결과 메시지를 서버로 전송합니다 (SPEC-AI-003 M3).
+// mcp_serve_stop 응답 및 에러 응답에 사용합니다.
 func (r *Router) sendMCPServeResult(msgID, status, message, errMsg string) error {
 	resultPayload := ws.MCPServeResultPayload{
 		Status:  status,

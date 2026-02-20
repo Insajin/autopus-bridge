@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 )
@@ -22,17 +23,31 @@ func (s *Server) handleExecuteTask(ctx context.Context, request mcp.CallToolRequ
 	}
 
 	workspaceID := request.GetString("workspace_id", "")
+	toolsStr := request.GetString("tools", "")
 	model := request.GetString("model", "")
+
+	// 쉼표로 구분된 tools 문자열을 슬라이스로 변환
+	var tools []string
+	if toolsStr != "" {
+		for _, t := range strings.Split(toolsStr, ",") {
+			trimmed := strings.TrimSpace(t)
+			if trimmed != "" {
+				tools = append(tools, trimmed)
+			}
+		}
+	}
 
 	s.logger.Info().
 		Str("agent_id", agentID).
 		Str("workspace_id", workspaceID).
+		Strs("tools", tools).
 		Msg("태스크 실행 요청")
 
 	resp, err := s.client.ExecuteTask(ctx, &ExecuteTaskRequest{
 		AgentID:     agentID,
 		Prompt:      prompt,
 		WorkspaceID: workspaceID,
+		Tools:       tools,
 		Model:       model,
 	})
 	if err != nil {
@@ -52,12 +67,14 @@ func (s *Server) handleExecuteTask(ctx context.Context, request mcp.CallToolRequ
 // 사용 가능한 Autopus 에이전트 목록을 반환합니다.
 func (s *Server) handleListAgents(ctx context.Context, request mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	workspaceID := request.GetString("workspace_id", "")
+	filter := request.GetString("filter", "")
 
 	s.logger.Info().
 		Str("workspace_id", workspaceID).
+		Str("filter", filter).
 		Msg("에이전트 목록 조회")
 
-	resp, err := s.client.ListAgents(ctx, workspaceID)
+	resp, err := s.client.ListAgents(ctx, workspaceID, filter)
 	if err != nil {
 		s.logger.Error().Err(err).Msg("에이전트 목록 조회 실패")
 		return mcp.NewToolResultError(fmt.Sprintf("Failed to list agents: %s", err.Error())), nil
@@ -147,16 +164,25 @@ func (s *Server) handleManageWorkspace(ctx context.Context, request mcp.CallTool
 		return mcp.NewToolResultError("required parameter 'action' is missing or invalid"), nil
 	}
 
-	validActions := map[string]bool{"list": true, "create": true, "update": true, "delete": true}
+	validActions := map[string]bool{"get": true, "list": true, "create": true, "update": true, "delete": true}
 	if !validActions[action] {
-		return mcp.NewToolResultError("action must be one of: list, create, update, delete"), nil
+		return mcp.NewToolResultError("action must be one of: get, list, create, update, delete"), nil
 	}
 
 	workspaceID := request.GetString("workspace_id", "")
+	configStr := request.GetString("config", "")
 
-	// update와 delete에는 workspace_id 필수
-	if (action == "update" || action == "delete") && workspaceID == "" {
+	// get, update, delete에는 workspace_id 필수
+	if (action == "get" || action == "update" || action == "delete") && workspaceID == "" {
 		return mcp.NewToolResultError(fmt.Sprintf("workspace_id is required for '%s' action", action)), nil
+	}
+
+	// config JSON 문자열을 파싱
+	var config map[string]interface{}
+	if configStr != "" {
+		if err := json.Unmarshal([]byte(configStr), &config); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid config JSON: %s", err.Error())), nil
+		}
 	}
 
 	s.logger.Info().
@@ -167,6 +193,7 @@ func (s *Server) handleManageWorkspace(ctx context.Context, request mcp.CallTool
 	resp, err := s.client.ManageWorkspace(ctx, &ManageWorkspaceRequest{
 		Action:      action,
 		WorkspaceID: workspaceID,
+		Config:      config,
 	})
 	if err != nil {
 		s.logger.Error().Err(err).Msg("워크스페이스 관리 실패")
@@ -190,6 +217,7 @@ func (s *Server) handleSearchKnowledge(ctx context.Context, request mcp.CallTool
 	}
 
 	workspaceID := request.GetString("workspace_id", "")
+	filtersStr := request.GetString("filters", "")
 
 	limit := request.GetInt("limit", 10)
 	if limit <= 0 {
@@ -197,6 +225,14 @@ func (s *Server) handleSearchKnowledge(ctx context.Context, request mcp.CallTool
 	}
 	if limit > 50 {
 		limit = 50
+	}
+
+	// filters JSON 문자열을 파싱
+	var filters map[string]interface{}
+	if filtersStr != "" {
+		if err := json.Unmarshal([]byte(filtersStr), &filters); err != nil {
+			return mcp.NewToolResultError(fmt.Sprintf("invalid filters JSON: %s", err.Error())), nil
+		}
 	}
 
 	s.logger.Info().
@@ -209,6 +245,7 @@ func (s *Server) handleSearchKnowledge(ctx context.Context, request mcp.CallTool
 		Query:       query,
 		WorkspaceID: workspaceID,
 		Limit:       limit,
+		Filters:     filters,
 	})
 	if err != nil {
 		s.logger.Error().Err(err).Msg("지식 검색 실패")

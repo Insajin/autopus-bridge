@@ -92,8 +92,17 @@ func run() error {
 
 	client := mcpserver.NewBackendClient(backendURL, tokenRefresher, timeout, logger)
 
-	// 4. MCP 서버 생성
-	srv := mcpserver.NewServer(client, logger)
+	// 4. MCP 서버 생성 (캐시 TTL 설정)
+	cacheTTLStr := viper.GetString("mcpserver.cache_ttl")
+	cacheTTL, cacheTTLErr := time.ParseDuration(cacheTTLStr)
+	if cacheTTLErr != nil {
+		cacheTTL = mcpserver.DefaultCacheTTL
+		logger.Warn().
+			Str("configured", cacheTTLStr).
+			Str("fallback", mcpserver.DefaultCacheTTL.String()).
+			Msg("유효하지 않은 캐시 TTL 설정, 기본값 사용")
+	}
+	srv := mcpserver.NewServer(client, logger, cacheTTL)
 
 	// 5. 시그널 핸들링 (graceful shutdown)
 	sigCh := make(chan os.Signal, 1)

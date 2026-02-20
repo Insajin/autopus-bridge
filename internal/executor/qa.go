@@ -199,6 +199,8 @@ func (e *QAPipelineExecutor) runServiceStage(ctx context.Context, workDir string
 
 	err := e.waitForHealthCheck(healthCtx, cfg.HealthCheck)
 	if err != nil {
+		// Wait for the subprocess to finish before reading the buffer to avoid race condition.
+		_ = cmd.Wait()
 		return ws.QAStageResult{
 			Name:       stageService,
 			Success:    false,

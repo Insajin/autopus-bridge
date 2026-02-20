@@ -1,6 +1,8 @@
 package mcpserver
 
 import (
+	"time"
+
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/rs/zerolog"
@@ -11,6 +13,8 @@ const (
 	ServerName = "autopus-bridge"
 	// ServerVersion은 MCP 서버 버전입니다.
 	ServerVersion = "0.1.0"
+	// DefaultCacheTTL은 리소스 캐시의 기본 TTL입니다.
+	DefaultCacheTTL = 30 * time.Second
 )
 
 // Server는 Autopus MCP 서버입니다.
@@ -18,14 +22,22 @@ const (
 type Server struct {
 	mcpServer *server.MCPServer
 	client    *BackendClient
+	cache     *Cache
 	logger    zerolog.Logger
 }
 
 // NewServer는 새 MCP 서버를 생성합니다.
 // BackendClient를 통해 Autopus 백엔드와 통신합니다.
-func NewServer(client *BackendClient, logger zerolog.Logger) *Server {
+// cacheTTL이 0이면 DefaultCacheTTL(30초)을 사용합니다.
+func NewServer(client *BackendClient, logger zerolog.Logger, cacheTTL ...time.Duration) *Server {
+	ttl := DefaultCacheTTL
+	if len(cacheTTL) > 0 && cacheTTL[0] > 0 {
+		ttl = cacheTTL[0]
+	}
+
 	s := &Server{
 		client: client,
+		cache:  NewCache(ttl),
 		logger: logger.With().Str("component", "mcpserver").Logger(),
 	}
 
@@ -44,6 +56,7 @@ func NewServer(client *BackendClient, logger zerolog.Logger) *Server {
 	s.logger.Info().
 		Str("name", ServerName).
 		Str("version", ServerVersion).
+		Dur("cache_ttl", ttl).
 		Msg("MCP 서버 초기화 완료")
 
 	return s
@@ -72,6 +85,9 @@ func (s *Server) registerTools() {
 		mcp.WithString("workspace_id",
 			mcp.Description("Target workspace ID (optional, uses default workspace if not specified)"),
 		),
+		mcp.WithString("tools",
+			mcp.Description("Comma-separated list of tools to enable for the agent (optional, e.g. 'search,calculator,browser')"),
+		),
 		mcp.WithString("model",
 			mcp.Description("AI model to use (optional, uses agent's default model if not specified)"),
 		),
@@ -83,6 +99,9 @@ func (s *Server) registerTools() {
 		mcp.WithDescription("List available Autopus agents. Returns agents accessible in the specified workspace."),
 		mcp.WithString("workspace_id",
 			mcp.Description("Workspace ID to filter agents (optional, lists all accessible agents if not specified)"),
+		),
+		mcp.WithString("filter",
+			mcp.Description("Filter agents by name or capability (optional, case-insensitive partial match)"),
 		),
 	)
 	s.mcpServer.AddTool(listAgentsTool, s.handleListAgents)
@@ -117,14 +136,17 @@ func (s *Server) registerTools() {
 
 	// 5. manage_workspace - 워크스페이스 관리
 	manageWorkspaceTool := mcp.NewTool("manage_workspace",
-		mcp.WithDescription("Manage Autopus workspaces. Supports listing, creating, updating, and deleting workspaces."),
+		mcp.WithDescription("Manage Autopus workspaces. Supports getting, listing, creating, updating, and deleting workspaces."),
 		mcp.WithString("action",
 			mcp.Required(),
 			mcp.Description("Action to perform"),
-			mcp.Enum("list", "create", "update", "delete"),
+			mcp.Enum("get", "list", "create", "update", "delete"),
 		),
 		mcp.WithString("workspace_id",
-			mcp.Description("Workspace ID (required for update/delete)"),
+			mcp.Description("Workspace ID (required for get/update/delete)"),
+		),
+		mcp.WithString("config",
+			mcp.Description("Workspace configuration as JSON string (optional, used for create/update)"),
 		),
 	)
 	s.mcpServer.AddTool(manageWorkspaceTool, s.handleManageWorkspace)
@@ -141,6 +163,9 @@ func (s *Server) registerTools() {
 		),
 		mcp.WithNumber("limit",
 			mcp.Description("Maximum number of results to return (default: 10, max: 50)"),
+		),
+		mcp.WithString("filters",
+			mcp.Description("Filter criteria as JSON string (optional, e.g. '{\"source\":\"docs\",\"type\":\"article\"}')"),
 		),
 	)
 	s.mcpServer.AddTool(searchKnowledgeTool, s.handleSearchKnowledge)
