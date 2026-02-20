@@ -534,6 +534,23 @@ func stepAIToolMCPConfig(providers []providerInfo, scanner *bufio.Scanner) {
 				printSkip("Codex CLI MCP 설정 건너뜀")
 			}
 
+			// Agent Skills 설치 (Gemini/Codex 공유 경로)
+			if !aitools.IsAgentSkillInstalled() {
+				fmt.Printf("  Autopus Agent Skill을 설치할까요? (Y/n): ")
+				if scanYesNoDefault(scanner, true) {
+					if err := aitools.InstallAgentSkill(); err != nil {
+						printError(fmt.Sprintf("Agent Skill 설치 실패: %v", err))
+					} else {
+						printSuccess("Agent Skill 설치 완료 (~/.agents/skills/autopus-platform/)")
+						configured++
+					}
+				} else {
+					printSkip("Agent Skill 설치 건너뜀")
+				}
+			} else {
+				printSuccess("Autopus Agent Skill 이미 설치됨")
+			}
+
 		case "Gemini":
 			fmt.Printf("  Gemini CLI MCP 자동 설정을 진행할까요? (Y/n): ")
 			if scanYesNoDefault(scanner, true) {
@@ -545,6 +562,23 @@ func stepAIToolMCPConfig(providers []providerInfo, scanner *bufio.Scanner) {
 				}
 			} else {
 				printSkip("Gemini CLI MCP 설정 건너뜀")
+			}
+
+			// Agent Skills 설치 (Gemini/Codex 공유 경로)
+			if !aitools.IsAgentSkillInstalled() {
+				fmt.Printf("  Autopus Agent Skill을 설치할까요? (Y/n): ")
+				if scanYesNoDefault(scanner, true) {
+					if err := aitools.InstallAgentSkill(); err != nil {
+						printError(fmt.Sprintf("Agent Skill 설치 실패: %v", err))
+					} else {
+						printSuccess("Agent Skill 설치 완료 (~/.agents/skills/autopus-platform/)")
+						configured++
+					}
+				} else {
+					printSkip("Agent Skill 설치 건너뜀")
+				}
+			} else {
+				printSuccess("Autopus Agent Skill 이미 설치됨")
 			}
 		}
 	}

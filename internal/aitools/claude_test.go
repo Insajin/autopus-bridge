@@ -497,6 +497,178 @@ func TestInstallPluginTo_쓰기불가경로(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// Agent Skill Install 테스트
+// ---------------------------------------------------------------------------
+
+// TestInstallAgentSkillTo_Success는 빈 디렉토리에 Agent Skill이 에러 없이 설치되는지 검증합니다.
+func TestInstallAgentSkillTo_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	err := InstallAgentSkillTo(tmpDir)
+	if err != nil {
+		t.Fatalf("InstallAgentSkillTo() 예상치 못한 에러: %v", err)
+	}
+
+	// SKILL.md가 올바른 경로에 존재하는지 확인
+	skillPath := filepath.Join(tmpDir, "autopus-platform", "SKILL.md")
+	info, err := os.Stat(skillPath)
+	if os.IsNotExist(err) {
+		t.Fatal("SKILL.md 파일이 생성되지 않았습니다")
+	}
+	if err != nil {
+		t.Fatalf("SKILL.md 상태 확인 실패: %v", err)
+	}
+	if info.IsDir() {
+		t.Fatal("SKILL.md가 파일이어야 하는데 디렉토리입니다")
+	}
+	if info.Size() == 0 {
+		t.Fatal("SKILL.md 파일 크기가 0입니다")
+	}
+}
+
+// TestInstallAgentSkillTo_Content는 설치된 SKILL.md에 예상 콘텐츠가 포함되어 있는지 검증합니다.
+func TestInstallAgentSkillTo_Content(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := InstallAgentSkillTo(tmpDir); err != nil {
+		t.Fatalf("InstallAgentSkillTo() 실패: %v", err)
+	}
+
+	skillPath := filepath.Join(tmpDir, "autopus-platform", "SKILL.md")
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("SKILL.md 읽기 실패: %v", err)
+	}
+
+	content := string(data)
+
+	// YAML frontmatter에 name: autopus-platform이 포함되어야 합니다
+	if !strings.Contains(content, "name: autopus-platform") {
+		t.Error("SKILL.md에 'name: autopus-platform'이 포함되어 있지 않습니다")
+	}
+
+	// YAML frontmatter 시작 마커가 있어야 합니다
+	if !strings.HasPrefix(content, "---") {
+		t.Error("SKILL.md가 YAML frontmatter(---)로 시작하지 않습니다")
+	}
+
+	// description 필드가 있어야 합니다
+	if !strings.Contains(content, "description:") {
+		t.Error("SKILL.md에 description 필드가 없습니다")
+	}
+}
+
+// TestInstallAgentSkillTo_Idempotent는 이미 설치된 디렉토리에 다시 설치해도 에러가 없는지 검증합니다.
+func TestInstallAgentSkillTo_Idempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 첫 번째 설치
+	if err := InstallAgentSkillTo(tmpDir); err != nil {
+		t.Fatalf("첫 번째 InstallAgentSkillTo() 실패: %v", err)
+	}
+
+	// 두 번째 설치 (덮어쓰기)
+	if err := InstallAgentSkillTo(tmpDir); err != nil {
+		t.Fatalf("두 번째 InstallAgentSkillTo() 실패 (멱등성 위반): %v", err)
+	}
+
+	// 파일이 여전히 유효한지 확인
+	skillPath := filepath.Join(tmpDir, "autopus-platform", "SKILL.md")
+	data, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("SKILL.md 읽기 실패: %v", err)
+	}
+	if !strings.Contains(string(data), "name: autopus-platform") {
+		t.Error("두 번째 설치 후 SKILL.md 내용이 올바르지 않습니다")
+	}
+}
+
+// TestIsAgentSkillInstalled는 Agent Skill 설치 여부 확인 기능을 테스트합니다.
+func TestIsAgentSkillInstalled(t *testing.T) {
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T, homeDir string)
+		expected bool
+	}{
+		{
+			name: "스킬이 설치되지 않은 경우",
+			setup: func(t *testing.T, homeDir string) {
+				// 아무것도 설정하지 않음
+			},
+			expected: false,
+		},
+		{
+			name: "스킬이 설치된 경우",
+			setup: func(t *testing.T, homeDir string) {
+				skillDir := filepath.Join(homeDir, ".agents", "skills", "autopus-platform")
+				if err := os.MkdirAll(skillDir, 0755); err != nil {
+					t.Fatalf("스킬 디렉토리 생성 실패: %v", err)
+				}
+				skillPath := filepath.Join(skillDir, "SKILL.md")
+				if err := os.WriteFile(skillPath, []byte("---\nname: autopus-platform\n---"), 0644); err != nil {
+					t.Fatalf("SKILL.md 생성 실패: %v", err)
+				}
+			},
+			expected: true,
+		},
+		{
+			name: ".agents 디렉토리만 있고 스킬이 없는 경우",
+			setup: func(t *testing.T, homeDir string) {
+				agentsDir := filepath.Join(homeDir, ".agents", "skills")
+				if err := os.MkdirAll(agentsDir, 0755); err != nil {
+					t.Fatalf(".agents/skills 디렉토리 생성 실패: %v", err)
+				}
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := t.TempDir()
+			t.Setenv("HOME", tmpDir)
+
+			tt.setup(t, tmpDir)
+
+			result := IsAgentSkillInstalled()
+			if result != tt.expected {
+				t.Errorf("IsAgentSkillInstalled() = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// TestInstallAgentSkill_미설치상태는 스킬이 설치되지 않은 상태에서 InstallAgentSkill이 정상 동작하는지 검증합니다.
+func TestInstallAgentSkill_미설치상태(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	err := InstallAgentSkill()
+	if err != nil {
+		t.Fatalf("InstallAgentSkill() 예상치 못한 에러: %v", err)
+	}
+
+	// 스킬이 설치되었는지 확인
+	skillPath := filepath.Join(tmpDir, ".agents", "skills", "autopus-platform", "SKILL.md")
+	if _, statErr := os.Stat(skillPath); os.IsNotExist(statErr) {
+		t.Error("InstallAgentSkill() 호출 후 SKILL.md가 생성되지 않았습니다")
+	}
+
+	// IsAgentSkillInstalled()도 true를 반환해야 합니다
+	if !IsAgentSkillInstalled() {
+		t.Error("InstallAgentSkill() 호출 후 IsAgentSkillInstalled()가 false를 반환합니다")
+	}
+}
+
+// TestInstallAgentSkillTo_쓰기불가경로는 쓰기 권한이 없는 경로에 설치할 때 에러를 반환하는지 검증합니다.
+func TestInstallAgentSkillTo_쓰기불가경로(t *testing.T) {
+	err := InstallAgentSkillTo("/dev/null/impossible-path")
+	if err == nil {
+		t.Error("쓰기 불가능한 경로에서 InstallAgentSkillTo()가 에러를 반환하지 않았습니다")
+	}
+}
+
 // TestConfigureClaudeCodeMCP_잘못된JSON은 기존 파일이 유효하지 않은 JSON일 때의 동작을 검증합니다.
 func TestConfigureClaudeCodeMCP_잘못된JSON(t *testing.T) {
 	tmpDir := t.TempDir()
