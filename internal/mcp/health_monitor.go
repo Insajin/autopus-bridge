@@ -135,24 +135,24 @@ func (h *HealthMonitor) CollectHealth() HealthReport {
 	h.statsMu.RLock()
 	defer h.statsMu.RUnlock()
 
-	// 실행 중인 서버 이름을 빠르게 조회하기 위한 맵
-	runningSet := make(map[string]ProcessInfo, len(running))
-	for _, proc := range running {
-		runningSet[proc.Name] = proc
+	// 실행 중인 서버 이름을 빠르게 조회하기 위한 맵 (mutex 복사 방지)
+	runningSet := make(map[string]struct{}, len(running))
+	for i := range running {
+		runningSet[running[i].Name] = struct{}{}
 	}
 
 	var servers []ServerHealth
 
 	// 1. 실행 중인 서버 처리
-	for _, proc := range running {
+	for i := range running {
 		sh := ServerHealth{
-			Name:          proc.Name,
+			Name:          running[i].Name,
 			Status:        "running",
-			UptimeSeconds: int64(now.Sub(proc.StartedAt).Seconds()),
+			UptimeSeconds: int64(now.Sub(running[i].StartedAt).Seconds()),
 			MemoryMB:      0, // OS별 메모리 조회는 생략, 0 반환
 		}
 
-		if stats, ok := h.stats[proc.Name]; ok {
+		if stats, ok := h.stats[running[i].Name]; ok {
 			sh.TotalCalls = stats.TotalCalls
 			sh.ErrorCount = stats.ErrorCount
 			sh.AvgResponseMs = calcAvgResponseMs(stats)

@@ -75,6 +75,12 @@ providers:
   gemini:
     api_key_env: GEMINI_API_KEY
     default_model: gemini-2.0-flash
+  codex:
+    mode: app-server          # api, cli, hybrid, app-server
+    cli_path: codex            # codex CLI binary path
+    api_key_env: OPENAI_API_KEY
+    default_model: o4-mini
+    approval_policy: auto-approve  # auto-approve or deny-all
 
 logging:
   level: info
@@ -112,6 +118,7 @@ All configuration keys can be overridden with environment variables using the `L
 | `LAB_TOKEN` | JWT authentication token |
 | `CLAUDE_API_KEY` | API key for Claude provider |
 | `GEMINI_API_KEY` | API key for Gemini provider |
+| `OPENAI_API_KEY` | API key for Codex provider |
 
 ### Credentials
 
@@ -130,7 +137,7 @@ Authentication tokens are stored at `~/.config/local-agent-bridge/credentials.js
                                          |               |               |
                                     +---------+    +-----------+   +-----------+
                                     | Claude  |    |  Gemini   |   |   Codex   |
-                                    |   CLI   |    |    CLI    |   |    CLI    |
+                                    |   CLI   |    |    CLI    |   | App Server|
                                     +---------+    +-----------+   +-----------+
 ```
 

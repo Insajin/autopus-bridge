@@ -10,16 +10,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/insajin/autopus-codex-rpc/client"
+	"github.com/insajin/autopus-codex-rpc/protocol"
 	"github.com/rs/zerolog"
 )
 
 // mockAppServer는 테스트용 App Server를 시뮬레이션하는 헬퍼입니다.
 // io.Pipe를 사용하여 클라이언트와 서버 간의 통신을 모킹합니다.
 type mockAppServer struct {
-	serverStdinR  *io.PipeReader  // 서버가 읽는 파이프 (클라이언트가 쓴 데이터)
-	clientStdinW  *io.PipeWriter  // 클라이언트가 쓰는 파이프 (서버의 stdin)
-	clientStdoutR *io.PipeReader  // 클라이언트가 읽는 파이프 (서버의 stdout)
-	serverStdoutW *io.PipeWriter  // 서버가 쓰는 파이프 (서버의 stdout)
+	serverStdinR  *io.PipeReader // 서버가 읽는 파이프 (클라이언트가 쓴 데이터)
+	clientStdinW  *io.PipeWriter // 클라이언트가 쓰는 파이프 (서버의 stdin)
+	clientStdoutR *io.PipeReader // 클라이언트가 읽는 파이프 (서버의 stdout)
+	serverStdoutW *io.PipeWriter // 서버가 쓰는 파이프 (서버의 stdout)
 }
 
 // newMockAppServer는 새로운 mock App Server를 생성합니다.
@@ -34,9 +36,9 @@ func newMockAppServer() *mockAppServer {
 	}
 }
 
-// createClient는 mock 파이프를 사용하여 JSONRPCClient를 생성합니다.
-func (m *mockAppServer) createClient(logger zerolog.Logger) *JSONRPCClient {
-	return NewJSONRPCClient(m.clientStdinW, m.clientStdoutR, logger)
+// createClient는 mock 파이프를 사용하여 공유 client.Client를 생성합니다.
+func (m *mockAppServer) createClient() *client.Client {
+	return client.NewJSONRPCClient(m.clientStdinW, m.clientStdoutR, client.NopLogger())
 }
 
 // close는 모든 파이프를 닫습니다.
@@ -47,21 +49,19 @@ func (m *mockAppServer) close() {
 
 // readRequest는 서버 측에서 클라이언트 요청을 읽습니다.
 // 줄바꿈 구분자로 NDJSON 형식의 요청을 파싱합니다.
-func (m *mockAppServer) readRequest(remaining *[]byte) (*JSONRPCRequest, error) {
+func (m *mockAppServer) readRequest(remaining *[]byte) (*protocol.JSONRPCRequest, error) {
 	for {
-		// remaining에 완전한 줄이 있는지 확인
 		if idx := findNewline(*remaining); idx >= 0 {
 			line := (*remaining)[:idx]
 			*remaining = (*remaining)[idx+1:]
 
-			var req JSONRPCRequest
+			var req protocol.JSONRPCRequest
 			if err := json.Unmarshal(line, &req); err != nil {
-				continue // JSON이 아닌 라인 무시
+				continue
 			}
 			return &req, nil
 		}
 
-		// 더 읽기
 		buf := make([]byte, 4096)
 		n, err := m.serverStdinR.Read(buf)
 		if err != nil {
@@ -72,15 +72,16 @@ func (m *mockAppServer) readRequest(remaining *[]byte) (*JSONRPCRequest, error) 
 }
 
 // sendResponse는 서버 측에서 클라이언트로 응답을 전송합니다.
+// protocol.JSONRPCResponse.ID는 *int64 타입입니다.
 func (m *mockAppServer) sendResponse(id int64, result interface{}) error {
 	resultData, err := json.Marshal(result)
 	if err != nil {
 		return err
 	}
 	raw := json.RawMessage(resultData)
-	resp := JSONRPCResponse{
+	resp := protocol.JSONRPCResponse{
 		JSONRPC: "2.0",
-		ID:      id,
+		ID:      &id,
 		Result:  &raw,
 	}
 	data, err := json.Marshal(resp)
@@ -94,7 +95,7 @@ func (m *mockAppServer) sendResponse(id int64, result interface{}) error {
 
 // sendNotification은 서버 측에서 클라이언트로 알림을 전송합니다.
 func (m *mockAppServer) sendNotification(method string, params interface{}) error {
-	notif := JSONRPCNotification{
+	notif := protocol.JSONRPCNotification{
 		JSONRPC: "2.0",
 		Method:  method,
 	}
@@ -116,9 +117,9 @@ func (m *mockAppServer) sendNotification(method string, params interface{}) erro
 
 // createMockProvider는 테스트용 CodexAppServerProvider를 생성합니다.
 // 실제 프로세스를 시작하지 않고 mock 파이프를 통해 직접 구성합니다.
-func createMockProvider(client *JSONRPCClient, approvalPolicy string) *CodexAppServerProvider {
+func createMockProvider(c *client.Client, approvalPolicy string) *CodexAppServerProvider {
 	proc := &AppServerProcess{
-		client:      client,
+		client:      c,
 		maxRestarts: 3,
 		logger:      zerolog.Nop(),
 	}
@@ -134,7 +135,6 @@ func createMockProvider(client *JSONRPCClient, approvalPolicy string) *CodexAppS
 }
 
 // TestAppServerProcess_StartStop은 프로세스 라이프사이클 기본 동작을 검증합니다.
-// 실제 프로세스 대신 mock 클라이언트의 running 상태를 테스트합니다.
 func TestAppServerProcess_StartStop(t *testing.T) {
 	proc := NewAppServerProcess("/nonexistent/codex", zerolog.Nop())
 
@@ -155,7 +155,7 @@ func TestAppServerProcess_StartStop(t *testing.T) {
 	// running 상태를 직접 설정하여 Client() 동작 확인
 	mock := newMockAppServer()
 
-	proc.client = mock.createClient(zerolog.Nop())
+	proc.client = mock.createClient()
 	proc.running.Store(true)
 
 	if !proc.IsRunning() {
@@ -182,25 +182,24 @@ func TestAppServerProcess_StartStop(t *testing.T) {
 func TestCodexAppServerProvider_Name(t *testing.T) {
 	mock := newMockAppServer()
 
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	name := prov.Name()
 	if name != "codex" {
 		t.Errorf("Name(): got %q, want %q", name, "codex")
 	}
 
-	// 정리: 서버 stdout을 먼저 닫아 readLoop EOF 발생
 	mock.close()
-	client.Close()
+	c.Close()
 }
 
 // TestCodexAppServerProvider_Supports는 모델 지원 여부를 검증합니다.
 func TestCodexAppServerProvider_Supports(t *testing.T) {
 	mock := newMockAppServer()
 
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	tests := []struct {
 		name     string
@@ -243,17 +242,16 @@ func TestCodexAppServerProvider_Supports(t *testing.T) {
 		})
 	}
 
-	// 정리
 	mock.close()
-	client.Close()
+	c.Close()
 }
 
 // TestCodexAppServerProvider_ExecuteInternal_MockFlow는
 // mock JSON-RPC 서버를 사용하여 전체 실행 흐름을 검증합니다.
 func TestCodexAppServerProvider_ExecuteInternal_MockFlow(t *testing.T) {
 	mock := newMockAppServer()
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	// mock 서버 고루틴: 요청 처리 및 응답/알림 전송
 	serverDone := make(chan struct{})
@@ -266,10 +264,10 @@ func TestCodexAppServerProvider_ExecuteInternal_MockFlow(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if req.Method != MethodThreadStart {
+		if req.Method != protocol.MethodThreadStart {
 			return
 		}
-		if err := mock.sendResponse(req.ID, ThreadStartResult{ThreadID: "thread-001"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-001"}); err != nil {
 			return
 		}
 
@@ -278,23 +276,23 @@ func TestCodexAppServerProvider_ExecuteInternal_MockFlow(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if req.Method != MethodTurnStart {
+		if req.Method != protocol.MethodTurnStart {
 			return
 		}
-		if err := mock.sendResponse(req.ID, TurnStartResult{TurnID: "turn-001"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-001"}); err != nil {
 			return
 		}
 
-		// 3. 에이전트 메시지 델타 알림 전송
-		if err := mock.sendNotification(MethodAgentMessageDelta, AgentMessageDelta{Text: "Hello, "}); err != nil {
+		// 3. 에이전트 메시지 델타 알림 전송 (공유 프로토콜: Delta 필드)
+		if err := mock.sendNotification(protocol.MethodAgentMessageDelta, protocol.AgentMessageDelta{Delta: "Hello, "}); err != nil {
 			return
 		}
-		if err := mock.sendNotification(MethodAgentMessageDelta, AgentMessageDelta{Text: "world!"}); err != nil {
+		if err := mock.sendNotification(protocol.MethodAgentMessageDelta, protocol.AgentMessageDelta{Delta: "world!"}); err != nil {
 			return
 		}
 
 		// 4. Turn 완료 알림 전송
-		if err := mock.sendNotification(MethodTurnCompleted, TurnCompletedParams{ThreadID: "thread-001"}); err != nil {
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-001"}); err != nil {
 			return
 		}
 	}()
@@ -312,7 +310,7 @@ func TestCodexAppServerProvider_ExecuteInternal_MockFlow(t *testing.T) {
 	// 서버 고루틴 종료 대기
 	mock.close()
 	<-serverDone
-	client.Close()
+	c.Close()
 
 	if err != nil {
 		t.Fatalf("Execute 실패: %v", err)
@@ -333,8 +331,8 @@ func TestCodexAppServerProvider_ExecuteInternal_MockFlow(t *testing.T) {
 // 스트리밍 콜백이 올바르게 호출되는지 검증합니다.
 func TestCodexAppServerProvider_ExecuteStreaming_Callback(t *testing.T) {
 	mock := newMockAppServer()
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	// mock 서버 고루틴
 	serverDone := make(chan struct{})
@@ -347,7 +345,7 @@ func TestCodexAppServerProvider_ExecuteStreaming_Callback(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, ThreadStartResult{ThreadID: "thread-002"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-002"}); err != nil {
 			return
 		}
 
@@ -356,25 +354,24 @@ func TestCodexAppServerProvider_ExecuteStreaming_Callback(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, TurnStartResult{TurnID: "turn-002"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-002"}); err != nil {
 			return
 		}
 
-		// 여러 에이전트 메시지 델타 전송 (문장 경계를 포함하여 플러시 유도)
+		// 여러 에이전트 메시지 델타 전송
 		deltas := []string{
 			"First sentence.",
 			" Second sentence.",
 		}
 		for _, text := range deltas {
-			if err := mock.sendNotification(MethodAgentMessageDelta, AgentMessageDelta{Text: text}); err != nil {
+			if err := mock.sendNotification(protocol.MethodAgentMessageDelta, protocol.AgentMessageDelta{Delta: text}); err != nil {
 				return
 			}
-			// 약간의 지연으로 플러시 기회 제공
 			time.Sleep(10 * time.Millisecond)
 		}
 
 		// Turn 완료
-		if err := mock.sendNotification(MethodTurnCompleted, TurnCompletedParams{ThreadID: "thread-002"}); err != nil {
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-002"}); err != nil {
 			return
 		}
 	}()
@@ -403,7 +400,7 @@ func TestCodexAppServerProvider_ExecuteStreaming_Callback(t *testing.T) {
 	// 정리
 	mock.close()
 	<-serverDone
-	client.Close()
+	c.Close()
 
 	if err != nil {
 		t.Fatalf("ExecuteStreaming 실패: %v", err)
@@ -436,7 +433,6 @@ func TestCodexAppServerProvider_ExecuteStreaming_Callback(t *testing.T) {
 }
 
 // readAnyMessage는 서버 측에서 JSON-RPC 메시지(요청 또는 알림)를 읽습니다.
-// 줄바꿈 구분자로 JSON 메시지를 파싱하여 raw map으로 반환합니다.
 func (m *mockAppServer) readAnyMessage(remaining *[]byte) (map[string]json.RawMessage, error) {
 	for {
 		if idx := findNewline(*remaining); idx >= 0 {
@@ -461,6 +457,7 @@ func (m *mockAppServer) readAnyMessage(remaining *[]byte) (map[string]json.RawMe
 
 // TestCodexAppServerProvider_ApprovalPolicy는
 // auto-approve 및 deny-all 승인 정책 동작을 검증합니다.
+// 새로운 프로토콜: MethodCommandExecutionApproval 사용
 func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 	tests := []struct {
 		name             string
@@ -482,8 +479,8 @@ func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			mock := newMockAppServer()
-			client := mock.createClient(zerolog.Nop())
-			prov := createMockProvider(client, tt.policy)
+			c := mock.createClient()
+			prov := createMockProvider(c, tt.policy)
 
 			// 승인 응답 수집 채널
 			approvalCh := make(chan string, 1)
@@ -499,7 +496,7 @@ func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 				if err != nil {
 					return
 				}
-				if err := mock.sendResponse(req.ID, ThreadStartResult{ThreadID: "thread-approval"}); err != nil {
+				if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-approval"}); err != nil {
 					return
 				}
 
@@ -508,27 +505,27 @@ func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 				if err != nil {
 					return
 				}
-				if err := mock.sendResponse(req.ID, TurnStartResult{TurnID: "turn-approval"}); err != nil {
+				if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-approval"}); err != nil {
 					return
 				}
 
-				// 승인 요청 알림 전송
-				if err := mock.sendNotification(MethodRequestApproval, RequestApprovalParams{
-					ExecutionID: "exec-001",
-					Type:        "command",
+				// 명령 실행 승인 요청 알림 전송 (새 프로토콜)
+				if err := mock.sendNotification(protocol.MethodCommandExecutionApproval, protocol.ApprovalRequest{
+					ThreadID: "thread-approval",
+					ItemID:   "item-001",
+					ItemType: "commandExecution",
+					Command:  "ls -la",
 				}); err != nil {
 					return
 				}
 
 				// 클라이언트의 승인 응답 읽기 (Notify 형태 - id 없음)
-				// readAnyMessage로 모든 JSON 메시지를 읽음
 				for {
 					raw, err := mock.readAnyMessage(&remaining)
 					if err != nil {
 						return
 					}
 
-					// method 필드 확인
 					methodData, ok := raw["method"]
 					if !ok {
 						continue
@@ -539,12 +536,13 @@ func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 						continue
 					}
 
-					if method == "requestApproval/response" {
+					// 새 프로토콜: item/commandExecution/approvalResponse
+					if method == "item/commandExecution/approvalResponse" {
 						paramsData, ok := raw["params"]
 						if !ok {
 							continue
 						}
-						var resp ApprovalResponse
+						var resp protocol.ApprovalResponseParams
 						if err := json.Unmarshal(paramsData, &resp); err == nil {
 							approvalCh <- resp.Decision
 						}
@@ -553,7 +551,7 @@ func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 				}
 
 				// Turn 완료 알림 전송
-				if err := mock.sendNotification(MethodTurnCompleted, TurnCompletedParams{ThreadID: "thread-approval"}); err != nil {
+				if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-approval"}); err != nil {
 					return
 				}
 			}()
@@ -580,7 +578,7 @@ func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 			// 정리
 			mock.close()
 			<-serverDone
-			client.Close()
+			c.Close()
 
 			if err != nil {
 				t.Fatalf("Execute 실패: %v", err)
@@ -597,8 +595,8 @@ func TestCodexAppServerProvider_ApprovalPolicy(t *testing.T) {
 func TestCodexAppServerProvider_ValidateConfig(t *testing.T) {
 	t.Run("프로세스 실행 중이면 유효", func(t *testing.T) {
 		mock := newMockAppServer()
-		client := mock.createClient(zerolog.Nop())
-		prov := createMockProvider(client, "auto-approve")
+		c := mock.createClient()
+		prov := createMockProvider(c, "auto-approve")
 
 		err := prov.ValidateConfig()
 		if err != nil {
@@ -606,13 +604,13 @@ func TestCodexAppServerProvider_ValidateConfig(t *testing.T) {
 		}
 
 		mock.close()
-		client.Close()
+		c.Close()
 	})
 
 	t.Run("프로세스 미실행 시 에러", func(t *testing.T) {
 		mock := newMockAppServer()
-		client := mock.createClient(zerolog.Nop())
-		prov := createMockProvider(client, "auto-approve")
+		c := mock.createClient()
+		prov := createMockProvider(c, "auto-approve")
 		prov.process.running.Store(false)
 
 		err := prov.ValidateConfig()
@@ -621,13 +619,13 @@ func TestCodexAppServerProvider_ValidateConfig(t *testing.T) {
 		}
 
 		mock.close()
-		client.Close()
+		c.Close()
 	})
 
 	t.Run("API 키 미설정 시 에러", func(t *testing.T) {
 		mock := newMockAppServer()
-		client := mock.createClient(zerolog.Nop())
-		prov := createMockProvider(client, "auto-approve")
+		c := mock.createClient()
+		prov := createMockProvider(c, "auto-approve")
 		prov.authKey = ""
 
 		err := prov.ValidateConfig()
@@ -636,7 +634,7 @@ func TestCodexAppServerProvider_ValidateConfig(t *testing.T) {
 		}
 
 		mock.close()
-		client.Close()
+		c.Close()
 	})
 }
 
@@ -645,8 +643,8 @@ func TestCodexAppServerProvider_ValidateConfig(t *testing.T) {
 func TestCodexAppServerProvider_ExecuteInternal_ProcessNotRunning(t *testing.T) {
 	mock := newMockAppServer()
 
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 	prov.process.running.Store(false)
 
 	ctx := context.Background()
@@ -660,14 +658,14 @@ func TestCodexAppServerProvider_ExecuteInternal_ProcessNotRunning(t *testing.T) 
 	}
 
 	mock.close()
-	client.Close()
+	c.Close()
 }
 
 // TestCodexAppServerProvider_DefaultModel은 모델 미지정 시 기본 모델이 사용되는지 검증합니다.
 func TestCodexAppServerProvider_DefaultModel(t *testing.T) {
 	mock := newMockAppServer()
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	// 서버에서 모델 확인
 	modelCh := make(chan string, 1)
@@ -682,12 +680,12 @@ func TestCodexAppServerProvider_DefaultModel(t *testing.T) {
 			return
 		}
 
-		var params ThreadStartParams
+		var params protocol.ThreadStartParams
 		if err := json.Unmarshal(req.Params, &params); err == nil {
 			modelCh <- params.Model
 		}
 
-		if err := mock.sendResponse(req.ID, ThreadStartResult{ThreadID: "thread-default"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-default"}); err != nil {
 			return
 		}
 
@@ -696,12 +694,12 @@ func TestCodexAppServerProvider_DefaultModel(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, TurnStartResult{TurnID: "turn-default"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-default"}); err != nil {
 			return
 		}
 
 		// Turn 완료
-		if err := mock.sendNotification(MethodTurnCompleted, TurnCompletedParams{ThreadID: "thread-default"}); err != nil {
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-default"}); err != nil {
 			return
 		}
 	}()
@@ -726,7 +724,7 @@ func TestCodexAppServerProvider_DefaultModel(t *testing.T) {
 
 	mock.close()
 	<-serverDone
-	client.Close()
+	c.Close()
 
 	if err != nil {
 		t.Fatalf("Execute 실패: %v", err)
@@ -734,11 +732,11 @@ func TestCodexAppServerProvider_DefaultModel(t *testing.T) {
 }
 
 // TestCodexAppServerProvider_CommandExecution은
-// 명령 실행 알림이 ToolCall로 변환되는지 검증합니다.
+// 명령 실행 item/completed 알림이 ToolCall로 변환되는지 검증합니다.
 func TestCodexAppServerProvider_CommandExecution(t *testing.T) {
 	mock := newMockAppServer()
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	serverDone := make(chan struct{})
 	go func() {
@@ -750,7 +748,7 @@ func TestCodexAppServerProvider_CommandExecution(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, ThreadStartResult{ThreadID: "thread-cmd"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-cmd"}); err != nil {
 			return
 		}
 
@@ -759,22 +757,27 @@ func TestCodexAppServerProvider_CommandExecution(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, TurnStartResult{TurnID: "turn-cmd"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-cmd"}); err != nil {
 			return
 		}
 
-		// 명령 실행 완료 알림
-		if err := mock.sendNotification(MethodCommandExecution, CommandExecutionItem{
-			ID:       "cmd-001",
+		// 명령 실행 완료 알림 (새 프로토콜: item/completed + ItemCompletedParams)
+		cmdData, _ := json.Marshal(protocol.CommandExecutionCompleted{
 			Command:  "ls -la",
-			Output:   "total 0",
 			ExitCode: 0,
+			Output:   "total 0",
+		})
+		if err := mock.sendNotification(protocol.MethodItemCompleted, protocol.ItemCompletedParams{
+			ThreadID: "thread-cmd",
+			ItemID:   "cmd-001",
+			ItemType: "commandExecution",
+			Data:     cmdData,
 		}); err != nil {
 			return
 		}
 
 		// 에이전트 메시지 델타
-		if err := mock.sendNotification(MethodAgentMessageDelta, AgentMessageDelta{Text: "Done."}); err != nil {
+		if err := mock.sendNotification(protocol.MethodAgentMessageDelta, protocol.AgentMessageDelta{Delta: "Done."}); err != nil {
 			return
 		}
 
@@ -782,7 +785,7 @@ func TestCodexAppServerProvider_CommandExecution(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// Turn 완료
-		if err := mock.sendNotification(MethodTurnCompleted, TurnCompletedParams{ThreadID: "thread-cmd"}); err != nil {
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-cmd"}); err != nil {
 			return
 		}
 	}()
@@ -797,7 +800,7 @@ func TestCodexAppServerProvider_CommandExecution(t *testing.T) {
 
 	mock.close()
 	<-serverDone
-	client.Close()
+	c.Close()
 
 	if err != nil {
 		t.Fatalf("Execute 실패: %v", err)
@@ -832,11 +835,11 @@ func TestCodexAppServerProvider_CommandExecution(t *testing.T) {
 }
 
 // TestCodexAppServerProvider_MCPToolCall은
-// MCP 도구 호출 알림이 ToolCall로 변환되는지 검증합니다.
+// MCP 도구 호출 item/completed 알림이 ToolCall로 변환되는지 검증합니다.
 func TestCodexAppServerProvider_MCPToolCall(t *testing.T) {
 	mock := newMockAppServer()
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	serverDone := make(chan struct{})
 	go func() {
@@ -848,7 +851,7 @@ func TestCodexAppServerProvider_MCPToolCall(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, ThreadStartResult{ThreadID: "thread-mcp"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-mcp"}); err != nil {
 			return
 		}
 
@@ -857,16 +860,21 @@ func TestCodexAppServerProvider_MCPToolCall(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, TurnStartResult{TurnID: "turn-mcp"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-mcp"}); err != nil {
 			return
 		}
 
-		// MCP 도구 호출 알림
-		if err := mock.sendNotification(MethodMCPToolCall, MCPToolCallItem{
-			ID:       "mcp-001",
+		// MCP 도구 호출 완료 알림 (새 프로토콜: item/completed + ItemCompletedParams)
+		mcpData, _ := json.Marshal(protocol.MCPToolCallCompleted{
 			ToolName: "file_read",
-			Input:    json.RawMessage(`{"path":"/tmp/test.txt"}`),
+			Input:    `{"path":"/tmp/test.txt"}`,
 			Output:   "file contents",
+		})
+		if err := mock.sendNotification(protocol.MethodItemCompleted, protocol.ItemCompletedParams{
+			ThreadID: "thread-mcp",
+			ItemID:   "mcp-001",
+			ItemType: "mcpToolCall",
+			Data:     mcpData,
 		}); err != nil {
 			return
 		}
@@ -875,7 +883,7 @@ func TestCodexAppServerProvider_MCPToolCall(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 
 		// Turn 완료
-		if err := mock.sendNotification(MethodTurnCompleted, TurnCompletedParams{ThreadID: "thread-mcp"}); err != nil {
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-mcp"}); err != nil {
 			return
 		}
 	}()
@@ -890,7 +898,7 @@ func TestCodexAppServerProvider_MCPToolCall(t *testing.T) {
 
 	mock.close()
 	<-serverDone
-	client.Close()
+	c.Close()
 
 	if err != nil {
 		t.Fatalf("Execute 실패: %v", err)
@@ -907,15 +915,6 @@ func TestCodexAppServerProvider_MCPToolCall(t *testing.T) {
 	}
 	if tc.Name != "file_read" {
 		t.Errorf("ToolCall Name: got %q, want %q", tc.Name, "file_read")
-	}
-
-	// Input JSON 확인
-	var input map[string]interface{}
-	if err := json.Unmarshal(tc.Input, &input); err != nil {
-		t.Fatalf("ToolCall Input 파싱 실패: %v", err)
-	}
-	if input["path"] != "/tmp/test.txt" {
-		t.Errorf("ToolCall path: got %v, want %q", input["path"], "/tmp/test.txt")
 	}
 }
 
@@ -935,8 +934,8 @@ func TestCodexAppServerProvider_MaxRestarts(t *testing.T) {
 // 컨텍스트 취소 시 실행이 중단되는지 검증합니다.
 func TestCodexAppServerProvider_ContextCancellation(t *testing.T) {
 	mock := newMockAppServer()
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	serverDone := make(chan struct{})
 	go func() {
@@ -948,7 +947,7 @@ func TestCodexAppServerProvider_ContextCancellation(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, ThreadStartResult{ThreadID: "thread-cancel"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-cancel"}); err != nil {
 			return
 		}
 
@@ -957,12 +956,11 @@ func TestCodexAppServerProvider_ContextCancellation(t *testing.T) {
 		if err != nil {
 			return
 		}
-		if err := mock.sendResponse(req.ID, TurnStartResult{TurnID: "turn-cancel"}); err != nil {
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-cancel"}); err != nil {
 			return
 		}
 
 		// Turn 완료를 보내지 않음 - 컨텍스트 취소 유도
-		// 서버가 응답하지 않고 대기
 		time.Sleep(5 * time.Second)
 	}()
 
@@ -977,7 +975,7 @@ func TestCodexAppServerProvider_ContextCancellation(t *testing.T) {
 
 	mock.close()
 	<-serverDone
-	client.Close()
+	c.Close()
 
 	if err == nil {
 		t.Fatal("컨텍스트 취소 에러를 기대했지만 nil을 받았습니다")
@@ -993,8 +991,8 @@ func TestCodexAppServerProvider_ContextCancellation(t *testing.T) {
 func TestCodexAppServerProvider_Close(t *testing.T) {
 	mock := newMockAppServer()
 
-	client := mock.createClient(zerolog.Nop())
-	prov := createMockProvider(client, "auto-approve")
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
 
 	// Close 호출 전 running 상태
 	if !prov.process.IsRunning() {

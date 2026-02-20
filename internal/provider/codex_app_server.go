@@ -14,17 +14,74 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/insajin/autopus-codex-rpc/client"
+	"github.com/insajin/autopus-codex-rpc/protocol"
 	"github.com/rs/zerolog"
 )
 
+// ===== zerologAdapter: zerolog -> client.Logger 어댑터 =====
+
+// zerologAdapter는 zerolog.Logger를 client.Logger 인터페이스로 래핑합니다.
+type zerologAdapter struct {
+	logger zerolog.Logger
+}
+
+func (a zerologAdapter) Debug(msg string, keysAndValues ...interface{}) {
+	event := a.logger.Debug()
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			continue
+		}
+		event = event.Interface(key, keysAndValues[i+1])
+	}
+	event.Msg(msg)
+}
+
+func (a zerologAdapter) Warn(msg string, keysAndValues ...interface{}) {
+	event := a.logger.Warn()
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			continue
+		}
+		event = event.Interface(key, keysAndValues[i+1])
+	}
+	event.Msg(msg)
+}
+
+func (a zerologAdapter) Error(msg string, keysAndValues ...interface{}) {
+	event := a.logger.Error()
+	for i := 0; i+1 < len(keysAndValues); i += 2 {
+		key, ok := keysAndValues[i].(string)
+		if !ok {
+			continue
+		}
+		event = event.Interface(key, keysAndValues[i+1])
+	}
+	event.Msg(msg)
+}
+
 // ===== AppServerProcess: Codex App Server 프로세스 관리자 =====
+
+// 프로세스 관련 에러 변수 (Bridge 전용)
+var (
+	// ErrConnectionClosed는 JSON-RPC 연결이 종료되었을 때 반환됩니다.
+	ErrConnectionClosed = fmt.Errorf("JSON-RPC 연결이 종료되었습니다")
+	// ErrMaxRestartsExceeded는 최대 재시작 횟수를 초과했을 때 반환됩니다.
+	ErrMaxRestartsExceeded = fmt.Errorf("최대 재시작 횟수를 초과했습니다")
+	// ErrHandshakeTimeout은 초기화 핸드셰이크 타임아웃입니다.
+	ErrHandshakeTimeout = fmt.Errorf("초기화 핸드셰이크 타임아웃")
+	// ErrProcessNotRunning은 App Server 프로세스가 실행 중이 아닐 때 반환됩니다.
+	ErrProcessNotRunning = fmt.Errorf("App Server 프로세스가 실행 중이 아닙니다")
+)
 
 // AppServerProcess는 Codex App Server 프로세스를 관리합니다.
 // exec.Cmd를 사용하여 하위 프로세스를 시작하고, stdin/stdout 파이프를 통해
 // JSON-RPC 2.0 프로토콜로 통신합니다.
 type AppServerProcess struct {
 	cmd          *exec.Cmd
-	client       *JSONRPCClient
+	client       *client.Client
 	cliPath      string
 	restartCount int
 	maxRestarts  int
@@ -78,8 +135,8 @@ func (p *AppServerProcess) Start(ctx context.Context) error {
 
 	p.running.Store(true)
 
-	// JSON-RPC 클라이언트 생성
-	p.client = NewJSONRPCClient(stdinPipe, stdoutPipe, p.logger)
+	// 공유 JSON-RPC 클라이언트 생성 (zerologAdapter 사용)
+	p.client = client.NewJSONRPCClient(stdinPipe, stdoutPipe, zerologAdapter{p.logger})
 
 	// stderr 로거 고루틴 시작
 	go p.logStderr(stderrPipe)
@@ -172,7 +229,7 @@ func (p *AppServerProcess) Restart(ctx context.Context) error {
 
 // Client는 JSON-RPC 클라이언트를 반환합니다.
 // 프로세스가 실행 중이 아니면 nil을 반환합니다.
-func (p *AppServerProcess) Client() *JSONRPCClient {
+func (p *AppServerProcess) Client() *client.Client {
 	if !p.running.Load() {
 		return nil
 	}
@@ -191,8 +248,9 @@ func (p *AppServerProcess) initialize(ctx context.Context) error {
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// initialize 요청 전송
-	result, err := p.client.Call(initCtx, MethodInitialize, InitializeParams{
+	// initialize 요청 전송 (공유 프로토콜 타입 사용)
+	result, err := p.client.Call(initCtx, protocol.MethodInitialize, protocol.InitializeParams{
+		ClientName:    "autopus-bridge",
 		ClientVersion: "autopus-bridge/1.0",
 	})
 	if err != nil {
@@ -202,20 +260,21 @@ func (p *AppServerProcess) initialize(ctx context.Context) error {
 		return fmt.Errorf("초기화 요청 실패: %w", err)
 	}
 
-	// 초기화 결과 파싱
+	// 초기화 결과 파싱 (공유 프로토콜 타입 사용)
 	if result != nil {
-		var initResult InitializeResult
+		var initResult protocol.InitializeResult
 		if err := json.Unmarshal(*result, &initResult); err != nil {
 			p.logger.Warn().Err(err).Msg("초기화 결과 파싱 실패 (무시)")
 		} else {
 			p.logger.Info().
+				Str("serverName", initResult.ServerName).
 				Str("serverVersion", initResult.ServerVersion).
 				Msg("서버 초기화 완료")
 		}
 	}
 
 	// initialized 알림 전송
-	if err := p.client.Notify(MethodInitialized, nil); err != nil {
+	if err := p.client.Notify(protocol.MethodInitialized, nil); err != nil {
 		return fmt.Errorf("initialized 알림 전송 실패: %w", err)
 	}
 
@@ -372,8 +431,8 @@ func (p *CodexAppServerProvider) ExecuteStreaming(ctx context.Context, req Execu
 
 // authenticate는 App Server에 인증을 수행합니다.
 func (p *CodexAppServerProvider) authenticate(ctx context.Context) error {
-	client := p.process.Client()
-	if client == nil {
+	rpcClient := p.process.Client()
+	if rpcClient == nil {
 		return ErrProcessNotRunning
 	}
 
@@ -381,8 +440,8 @@ func (p *CodexAppServerProvider) authenticate(ctx context.Context) error {
 	authCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// 인증 파라미터 구성
-	params := AccountLoginParams{
+	// 인증 파라미터 구성 (공유 프로토콜 타입 사용)
+	params := protocol.AccountLoginParams{
 		Method: p.authMethod,
 	}
 	if p.authMethod == "apiKey" {
@@ -392,7 +451,7 @@ func (p *CodexAppServerProvider) authenticate(ctx context.Context) error {
 	}
 
 	// 인증 요청 전송
-	_, err := client.Call(authCtx, MethodAccountLoginStart, params)
+	_, err := rpcClient.Call(authCtx, protocol.MethodAccountLoginStart, params)
 	if err != nil {
 		return fmt.Errorf("인증 요청 실패: %w", err)
 	}
@@ -406,14 +465,14 @@ func (p *CodexAppServerProvider) authenticate(ctx context.Context) error {
 
 // executeInternal은 실제 실행 로직을 구현합니다.
 // 1. thread/start로 스레드 생성
-// 2. 알림 핸들러 등록 (메시지 델타, 명령 실행, MCP 도구 호출, 승인 요청, Turn 완료)
+// 2. 알림 핸들러 등록 (메시지 델타, 아이템 완료, 승인 요청, Turn 완료)
 // 3. turn/start로 턴 시작
 // 4. Turn 완료 대기
 // 5. 결과 조립 및 반환
 func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req ExecuteRequest, onDelta StreamCallback) (*ExecuteResponse, error) {
 	// 1. 클라이언트 확인
-	client := p.process.Client()
-	if client == nil || !p.process.IsRunning() {
+	rpcClient := p.process.Client()
+	if rpcClient == nil || !p.process.IsRunning() {
 		return nil, ErrProcessNotRunning
 	}
 
@@ -434,7 +493,7 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		cwd = "."
 	}
 
-	threadResult, err := client.Call(ctx, MethodThreadStart, ThreadStartParams{
+	threadResult, err := rpcClient.Call(ctx, protocol.MethodThreadStart, protocol.ThreadStartParams{
 		Model:          model,
 		Cwd:            cwd,
 		ApprovalPolicy: approvalPolicy,
@@ -444,7 +503,7 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 	}
 
 	// thread/start 결과 파싱
-	var thread ThreadStartResult
+	var thread protocol.ThreadStartResult
 	if threadResult != nil {
 		if err := json.Unmarshal(*threadResult, &thread); err != nil {
 			return nil, fmt.Errorf("thread/start 결과 파싱 실패: %w", err)
@@ -463,21 +522,21 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		accumulator = NewStreamAccumulator()
 	}
 
-	// 에이전트 메시지 델타 핸들러
-	client.OnNotification(MethodAgentMessageDelta, func(method string, params json.RawMessage) {
-		var delta AgentMessageDelta
+	// 에이전트 메시지 델타 핸들러 (공유 프로토콜: AgentMessageDelta.Delta)
+	rpcClient.OnNotification(protocol.MethodAgentMessageDelta, func(method string, params json.RawMessage) {
+		var delta protocol.AgentMessageDelta
 		if err := json.Unmarshal(params, &delta); err != nil {
 			p.logger.Warn().Err(err).Msg("에이전트 메시지 델타 파싱 실패")
 			return
 		}
 
 		mu.Lock()
-		outputBuilder.WriteString(delta.Text)
+		outputBuilder.WriteString(delta.Delta)
 		mu.Unlock()
 
 		// 스트리밍 콜백 처리 (StreamAccumulator는 자체 뮤텍스 보유)
 		if onDelta != nil && accumulator != nil {
-			accumulator.Add(delta.Text)
+			accumulator.Add(delta.Delta)
 			if accumulator.ShouldFlush() {
 				flushed := accumulator.Flush()
 				onDelta(flushed, accumulator.GetAccumulated())
@@ -485,79 +544,110 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		}
 	})
 
-	// 명령 실행 완료 핸들러
-	client.OnNotification(MethodCommandExecution, func(method string, params json.RawMessage) {
-		var item CommandExecutionItem
+	// 아이템 완료 핸들러 (commandExecution, mcpToolCall 등)
+	rpcClient.OnNotification(protocol.MethodItemCompleted, func(method string, params json.RawMessage) {
+		var item protocol.ItemCompletedParams
 		if err := json.Unmarshal(params, &item); err != nil {
-			p.logger.Warn().Err(err).Msg("명령 실행 아이템 파싱 실패")
+			p.logger.Warn().Err(err).Msg("아이템 완료 파싱 실패")
 			return
 		}
 
-		// ToolCall 형태로 변환
-		inputData, _ := json.Marshal(map[string]interface{}{
-			"command": item.Command,
-			"output":  item.Output,
-		})
+		switch item.ItemType {
+		case "commandExecution":
+			var cmdData protocol.CommandExecutionCompleted
+			if err := json.Unmarshal(item.Data, &cmdData); err != nil {
+				p.logger.Warn().Err(err).Msg("명령 실행 데이터 파싱 실패")
+				return
+			}
 
-		mu.Lock()
-		toolCalls = append(toolCalls, ToolCall{
-			ID:    item.ID,
-			Name:  "command_execution",
-			Input: inputData,
-		})
-		mu.Unlock()
-	})
+			inputData, _ := json.Marshal(map[string]interface{}{
+				"command": cmdData.Command,
+				"output":  cmdData.Output,
+			})
 
-	// MCP 도구 호출 핸들러
-	client.OnNotification(MethodMCPToolCall, func(method string, params json.RawMessage) {
-		var item MCPToolCallItem
-		if err := json.Unmarshal(params, &item); err != nil {
-			p.logger.Warn().Err(err).Msg("MCP 도구 호출 아이템 파싱 실패")
-			return
+			mu.Lock()
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    item.ItemID,
+				Name:  "command_execution",
+				Input: inputData,
+			})
+			mu.Unlock()
+
+		case "mcpToolCall":
+			var mcpData protocol.MCPToolCallCompleted
+			if err := json.Unmarshal(item.Data, &mcpData); err != nil {
+				p.logger.Warn().Err(err).Msg("MCP 도구 호출 데이터 파싱 실패")
+				return
+			}
+
+			inputData, _ := json.Marshal(map[string]string{"input": mcpData.Input})
+			mu.Lock()
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    item.ItemID,
+				Name:  mcpData.ToolName,
+				Input: inputData,
+			})
+			mu.Unlock()
 		}
-
-		mu.Lock()
-		toolCalls = append(toolCalls, ToolCall{
-			ID:    item.ID,
-			Name:  item.ToolName,
-			Input: item.Input,
-		})
-		mu.Unlock()
 	})
 
-	// 승인 요청 핸들러
-	client.OnNotification(MethodRequestApproval, func(method string, params json.RawMessage) {
-		var approvalParams RequestApprovalParams
-		if err := json.Unmarshal(params, &approvalParams); err != nil {
+	// 명령 실행 승인 요청 핸들러
+	rpcClient.OnNotification(protocol.MethodCommandExecutionApproval, func(method string, params json.RawMessage) {
+		var approvalReq protocol.ApprovalRequest
+		if err := json.Unmarshal(params, &approvalReq); err != nil {
 			p.logger.Warn().Err(err).Msg("승인 요청 파싱 실패")
 			return
 		}
 
-		// 승인 정책에 따라 결정
 		decision := "accept"
 		if approvalPolicy == "deny-all" {
 			decision = "decline"
 		}
 
-		response := ApprovalResponse{
-			ExecutionID: approvalParams.ExecutionID,
-			Decision:    decision,
+		response := protocol.ApprovalResponseParams{
+			ThreadID: approvalReq.ThreadID,
+			ItemID:   approvalReq.ItemID,
+			Decision: decision,
 		}
 
-		if err := client.Notify("requestApproval/response", response); err != nil {
+		if err := rpcClient.Notify("item/commandExecution/approvalResponse", response); err != nil {
 			p.logger.Warn().Err(err).Msg("승인 응답 전송 실패")
 		}
 	})
 
+	// 파일 변경 승인 요청 핸들러
+	rpcClient.OnNotification(protocol.MethodFileChangeApproval, func(method string, params json.RawMessage) {
+		var approvalReq protocol.ApprovalRequest
+		if err := json.Unmarshal(params, &approvalReq); err != nil {
+			p.logger.Warn().Err(err).Msg("파일 변경 승인 요청 파싱 실패")
+			return
+		}
+
+		decision := "accept"
+		if approvalPolicy == "deny-all" {
+			decision = "decline"
+		}
+
+		response := protocol.ApprovalResponseParams{
+			ThreadID: approvalReq.ThreadID,
+			ItemID:   approvalReq.ItemID,
+			Decision: decision,
+		}
+
+		if err := rpcClient.Notify("item/fileChange/approvalResponse", response); err != nil {
+			p.logger.Warn().Err(err).Msg("파일 변경 승인 응답 전송 실패")
+		}
+	})
+
 	// Turn 완료 핸들러
-	client.OnNotification(MethodTurnCompleted, func(method string, params json.RawMessage) {
+	rpcClient.OnNotification(protocol.MethodTurnCompleted, func(method string, params json.RawMessage) {
 		close(turnDone)
 	})
 
 	// 5. turn/start 호출
-	_, err = client.Call(ctx, MethodTurnStart, TurnStartParams{
+	_, err = rpcClient.Call(ctx, protocol.MethodTurnStart, protocol.TurnStartParams{
 		ThreadID: thread.ThreadID,
-		Input: []TurnInput{
+		Input: []protocol.TurnInput{
 			{
 				Type: "text",
 				Text: req.Prompt,

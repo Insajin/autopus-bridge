@@ -424,8 +424,8 @@ func TestView_QuittingMessage(t *testing.T) {
 
 	view := m.View()
 
-	if view != "Dashboard closed.\n" {
-		t.Errorf("expected quitting view to be 'Dashboard closed.\\n', got %q", view)
+	if view != "Autopus Local Bridge Dashboard closed.\n" {
+		t.Errorf("expected quitting view to be 'Autopus Local Bridge Dashboard closed.\\n', got %q", view)
 	}
 }
 

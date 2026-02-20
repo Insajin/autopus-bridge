@@ -11,12 +11,15 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/insajin/autopus-agent-protocol v0.1.0
+	github.com/insajin/autopus-codex-rpc v0.0.0-00010101000000-000000000000
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.8.1
 	github.com/spf13/viper v1.19.0
 	google.golang.org/api v0.189.0
 	gopkg.in/yaml.v3 v3.0.1
 )
+
+replace github.com/insajin/autopus-codex-rpc => ../autopus-codex-rpc
 
 require (
 	cloud.google.com/go v0.115.0 // indirect

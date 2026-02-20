@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -216,10 +217,10 @@ func TestQAExecutor_ServiceHealthCheck_Polling(t *testing.T) {
 	workDir := t.TempDir()
 
 	// Health check server that fails the first few requests then succeeds.
-	requestCount := 0
+	var requestCount atomic.Int32
 	healthServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestCount++
-		if requestCount < 3 {
+		requestCount.Add(1)
+		if requestCount.Load() < 3 {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
 		}
@@ -253,8 +254,8 @@ func TestQAExecutor_ServiceHealthCheck_Polling(t *testing.T) {
 	}
 
 	// Verify health check was polled multiple times.
-	if requestCount < 3 {
-		t.Errorf("expected at least 3 health check requests, got %d", requestCount)
+	if requestCount.Load() < 3 {
+		t.Errorf("expected at least 3 health check requests, got %d", requestCount.Load())
 	}
 }
 
