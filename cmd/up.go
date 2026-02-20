@@ -242,11 +242,11 @@ func stepAuthCheck() (*auth.Credentials, error) {
 		return creds, nil
 	}
 
-	// No credentials - trigger Device Auth Flow
-	fmt.Println("  저장된 인증 정보가 없습니다. 기기 인증을 시작합니다...")
+	// No credentials - trigger auth flow (브라우저 또는 Device Code)
+	fmt.Println("  저장된 인증 정보가 없습니다. 인증을 시작합니다...")
 	fmt.Println()
 
-	newCreds, err := performDeviceAuthFlow()
+	newCreds, err := performAuthFlow()
 	if err != nil {
 		return nil, err
 	}
@@ -275,8 +275,8 @@ func stepTokenRefresh(creds *auth.Credentials) (*auth.Credentials, error) {
 			fmt.Println("  토큰 갱신 실패. 재인증을 시작합니다...")
 			fmt.Println()
 
-			// Refresh failed - trigger full re-auth
-			newCreds, authErr := performDeviceAuthFlow()
+			// Refresh failed - trigger full re-auth (브라우저 또는 Device Code)
+			newCreds, authErr := performAuthFlow()
 			if authErr != nil {
 				return nil, authErr
 			}
@@ -288,11 +288,11 @@ func stepTokenRefresh(creds *auth.Credentials) (*auth.Credentials, error) {
 		return creds, nil
 	}
 
-	// No refresh token - need full re-auth
+	// No refresh token - need full re-auth (브라우저 또는 Device Code)
 	fmt.Println("  갱신 토큰이 없습니다. 재인증을 시작합니다...")
 	fmt.Println()
 
-	newCreds, err := performDeviceAuthFlow()
+	newCreds, err := performAuthFlow()
 	if err != nil {
 		return nil, err
 	}
