@@ -234,6 +234,63 @@ func TestConfigureCodexMCP_디렉토리자동생성(t *testing.T) {
 	}
 }
 
+// TestConfigureCodexMCP_읽기실패는 기존 파일이 읽기 불가할 때 에러를 반환하는지 검증합니다.
+func TestConfigureCodexMCP_읽기실패(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	configPath := filepath.Join(tmpDir, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+
+	// 파일 생성 후 읽기 권한 제거
+	if err := os.WriteFile(configPath, []byte("[settings]\nmodel = \"o3\"\n"), 0644); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+	if err := os.Chmod(configPath, 0000); err != nil {
+		t.Fatalf("권한 변경 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(configPath, 0644)
+	})
+
+	err := ConfigureCodexMCP()
+	if err == nil {
+		t.Error("읽기 불가 파일에서 ConfigureCodexMCP()가 에러를 반환하지 않았습니다")
+	}
+}
+
+// TestConfigureCodexMCP_쓰기실패는 기존 설정에 추가 시 쓰기가 실패하는 경우를 검증합니다.
+func TestConfigureCodexMCP_쓰기실패(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	configPath := filepath.Join(tmpDir, ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(configPath), 0755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+
+	// 기존 내용 작성
+	existingContent := "[settings]\nmodel = \"o3\"\n"
+	if err := os.WriteFile(configPath, []byte(existingContent), 0644); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+
+	// 파일을 읽기 전용으로 변경 (읽기는 가능하지만 쓰기 불가)
+	if err := os.Chmod(configPath, 0444); err != nil {
+		t.Fatalf("권한 변경 실패: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(configPath, 0644)
+	})
+
+	err := ConfigureCodexMCP()
+	if err == nil {
+		t.Error("쓰기 불가 파일에서 ConfigureCodexMCP()가 에러를 반환하지 않았습니다")
+	}
+}
+
 // TestCodexMCPSection은 codexMCPSection 상수의 내용을 검증합니다.
 func TestCodexMCPSection(t *testing.T) {
 	if !strings.Contains(codexMCPSection, "[mcp_servers.autopus]") {

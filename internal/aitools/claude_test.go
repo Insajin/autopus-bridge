@@ -468,6 +468,56 @@ func TestIsPluginInstalled_Installed(t *testing.T) {
 	}
 }
 
+// TestInstallPlugin_플러그인미설치는 플러그인이 설치되지 않은 상태에서 InstallPlugin이 정상 동작하는지 검증합니다.
+func TestInstallPlugin_플러그인미설치(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// 플러그인이 설치되지 않은 상태에서 호출
+	err := InstallPlugin()
+	if err != nil {
+		t.Fatalf("InstallPlugin() 예상치 못한 에러: %v", err)
+	}
+
+	// 플러그인이 설치되었는지 확인
+	pluginJSON := filepath.Join(tmpDir, ".claude", "plugins", "autopus", ".claude-plugin", "plugin.json")
+	if _, statErr := os.Stat(pluginJSON); os.IsNotExist(statErr) {
+		t.Error("InstallPlugin() 호출 후 plugin.json이 생성되지 않았습니다")
+	}
+}
+
+// TestInstallPlugin_이미설치됨은 플러그인이 이미 설치된 상태에서 조기 반환하는지 검증합니다.
+func TestInstallPlugin_이미설치됨(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// 먼저 플러그인 설치
+	pluginDir := filepath.Join(tmpDir, ".claude", "plugins", "autopus")
+	if err := InstallPluginTo(pluginDir); err != nil {
+		t.Fatalf("사전 설치 실패: %v", err)
+	}
+
+	// 이미 설치된 상태에서 다시 호출 -- nil 반환(조기 반환)
+	err := InstallPlugin()
+	if err != nil {
+		t.Fatalf("InstallPlugin() 이미 설치된 상태에서 에러: %v", err)
+	}
+
+	// 여전히 설치 상태 유지 확인
+	if !IsPluginInstalled() {
+		t.Error("InstallPlugin() 호출 후 플러그인 설치 상태가 아닙니다")
+	}
+}
+
+// TestInstallPluginTo_쓰기불가경로는 쓰기 권한이 없는 경로에 설치할 때 에러를 반환하는지 검증합니다.
+func TestInstallPluginTo_쓰기불가경로(t *testing.T) {
+	// /dev/null을 디렉토리 경로로 사용하면 하위 디렉토리 생성이 실패합니다
+	err := InstallPluginTo("/dev/null/impossible-path")
+	if err == nil {
+		t.Error("쓰기 불가능한 경로에서 InstallPluginTo()가 에러를 반환하지 않았습니다")
+	}
+}
+
 // TestConfigureClaudeCodeMCP_잘못된JSON은 기존 파일이 유효하지 않은 JSON일 때의 동작을 검증합니다.
 func TestConfigureClaudeCodeMCP_잘못된JSON(t *testing.T) {
 	tmpDir := t.TempDir()

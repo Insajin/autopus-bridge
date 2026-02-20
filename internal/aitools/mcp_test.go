@@ -499,6 +499,85 @@ func TestMCPServerConfig_JSON직렬화(t *testing.T) {
 	}
 }
 
+// TestWriteJSONConfig_쓰기불가경로는 디렉토리 생성이 불가능한 경로에서 에러를 반환하는지 검증합니다.
+func TestWriteJSONConfig_쓰기불가경로(t *testing.T) {
+	// /dev/null 아래에는 디렉토리를 생성할 수 없습니다
+	err := WriteJSONConfig("/dev/null/impossible/config.json", map[string]interface{}{"key": "value"})
+	if err == nil {
+		t.Error("쓰기 불가능한 경로에서 WriteJSONConfig()가 에러를 반환하지 않았습니다")
+	}
+}
+
+// TestWriteJSONConfig_파일쓰기실패는 디렉토리가 있지만 파일 쓰기가 실패하는 경우를 검증합니다.
+func TestWriteJSONConfig_파일쓰기실패(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 파일 경로에 디렉토리를 만들어 WriteFile이 실패하도록 함
+	filePath := filepath.Join(tmpDir, "config.json")
+	if err := os.MkdirAll(filePath, 0755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+
+	err := WriteJSONConfig(filePath, map[string]interface{}{"key": "value"})
+	if err == nil {
+		t.Error("파일 쓰기 실패 시 WriteJSONConfig()가 에러를 반환하지 않았습니다")
+	}
+}
+
+// TestBackupFile_읽기불가파일은 파일이 존재하지만 읽기 권한이 없는 경우 에러를 반환하는지 검증합니다.
+func TestBackupFile_읽기불가파일(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.json")
+
+	// 파일 생성 후 읽기 권한 제거
+	if err := os.WriteFile(filePath, []byte(`{"key": "value"}`), 0644); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+	if err := os.Chmod(filePath, 0000); err != nil {
+		t.Fatalf("권한 변경 실패: %v", err)
+	}
+	// 테스트 후 정리를 위해 권한 복원
+	t.Cleanup(func() {
+		os.Chmod(filePath, 0644)
+	})
+
+	err := BackupFile(filePath)
+	if err == nil {
+		t.Error("읽기 불가 파일에서 BackupFile()이 에러를 반환하지 않았습니다")
+	}
+}
+
+// TestBackupFile_백업쓰기실패는 백업 파일 쓰기가 실패하는 경우를 검증합니다.
+func TestBackupFile_백업쓰기실패(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.json")
+
+	// 원본 파일 생성
+	if err := os.WriteFile(filePath, []byte(`{"key": "value"}`), 0644); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+
+	// .bak 경로에 디렉토리를 생성하여 WriteFile이 실패하도록 함
+	backupPath := filePath + ".bak"
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatalf("백업 경로에 디렉토리 생성 실패: %v", err)
+	}
+
+	err := BackupFile(filePath)
+	if err == nil {
+		t.Error("백업 쓰기 실패 시 BackupFile()이 에러를 반환하지 않았습니다")
+	}
+}
+
+// TestEnsureDir_디렉토리생성불가는 디렉토리를 생성할 수 없는 경로에서 에러를 반환하는지 검증합니다.
+func TestEnsureDir_디렉토리생성불가(t *testing.T) {
+	// /dev/null은 파일이므로 하위에 디렉토리를 만들 수 없습니다
+	err := EnsureDir("/dev/null/subdir/file.json")
+	if err == nil {
+		t.Error("디렉토리 생성 불가능한 경로에서 EnsureDir()이 에러를 반환하지 않았습니다")
+	}
+}
+
 // TestAIToolInfo_JSON직렬화는 AIToolInfo의 JSON 직렬화를 검증합니다.
 func TestAIToolInfo_JSON직렬화(t *testing.T) {
 	info := AIToolInfo{

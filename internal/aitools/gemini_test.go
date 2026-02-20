@@ -264,6 +264,33 @@ func TestConfigureGeminiMCP_잘못된JSON(t *testing.T) {
 	}
 }
 
+// TestConfigureGeminiMCP_백업실패는 기존 파일 백업이 실패하는 경우 에러를 반환하는지 검증합니다.
+func TestConfigureGeminiMCP_백업실패(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	settingsPath := filepath.Join(tmpDir, ".gemini", "settings.json")
+	if err := os.MkdirAll(filepath.Dir(settingsPath), 0755); err != nil {
+		t.Fatalf("디렉토리 생성 실패: %v", err)
+	}
+
+	// 설정 파일 생성 (Stat 성공, ReadFile 성공, 하지만 .bak 경로에 쓰기 불가)
+	if err := os.WriteFile(settingsPath, []byte(`{"theme":"dark"}`), 0644); err != nil {
+		t.Fatalf("파일 생성 실패: %v", err)
+	}
+
+	// .bak 경로에 디렉토리를 생성하여 WriteFile이 실패하도록 함
+	backupPath := settingsPath + ".bak"
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		t.Fatalf("백업 경로에 디렉토리 생성 실패: %v", err)
+	}
+
+	err := ConfigureGeminiMCP()
+	if err == nil {
+		t.Error("백업 실패 시 ConfigureGeminiMCP()가 에러를 반환하지 않았습니다")
+	}
+}
+
 // TestConfigureGeminiMCP_멱등성은 두 번 호출해도 정상 동작하는지 검증합니다.
 func TestConfigureGeminiMCP_멱등성(t *testing.T) {
 	tmpDir := t.TempDir()
