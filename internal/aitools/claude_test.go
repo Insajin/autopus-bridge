@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -230,6 +231,240 @@ func TestConfigureClaudeCodeMCP_백업생성(t *testing.T) {
 
 	if string(backupContent) != originalContent {
 		t.Errorf("백업 파일 내용이 원본과 다릅니다: got %q, want %q", string(backupContent), originalContent)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Plugin Install / Version 테스트
+// ---------------------------------------------------------------------------
+
+// TestInstallPluginTo_Success는 빈 디렉토리에 플러그인이 에러 없이 설치되는지 검증합니다.
+func TestInstallPluginTo_Success(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	err := InstallPluginTo(tmpDir)
+	if err != nil {
+		t.Fatalf("InstallPluginTo() 예상치 못한 에러: %v", err)
+	}
+}
+
+// TestInstallPluginTo_FileStructure는 설치 후 모든 임베디드 파일이 존재하는지 검증합니다.
+func TestInstallPluginTo_FileStructure(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := InstallPluginTo(tmpDir); err != nil {
+		t.Fatalf("InstallPluginTo() 실패: %v", err)
+	}
+
+	// 임베디드 plugin-dist 디렉토리에 포함된 모든 파일을 검증
+	expectedFiles := []string{
+		".claude-plugin/plugin.json",
+		".mcp.json",
+		"agents/orchestrator.md",
+		"commands/execute.md",
+		"commands/status.md",
+		"skills/autopus-context/SKILL.md",
+	}
+
+	for _, relPath := range expectedFiles {
+		fullPath := filepath.Join(tmpDir, relPath)
+		info, err := os.Stat(fullPath)
+		if os.IsNotExist(err) {
+			t.Errorf("파일이 존재하지 않습니다: %s", relPath)
+			continue
+		}
+		if err != nil {
+			t.Errorf("파일 상태 확인 실패 (%s): %v", relPath, err)
+			continue
+		}
+		if info.IsDir() {
+			t.Errorf("파일이어야 하는데 디렉토리입니다: %s", relPath)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("파일 크기가 0입니다: %s", relPath)
+		}
+	}
+}
+
+// TestInstallPluginTo_PluginJSON은 설치된 plugin.json이 유효한 JSON이고 필수 필드를 포함하는지 검증합니다.
+func TestInstallPluginTo_PluginJSON(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := InstallPluginTo(tmpDir); err != nil {
+		t.Fatalf("InstallPluginTo() 실패: %v", err)
+	}
+
+	pluginJSONPath := filepath.Join(tmpDir, ".claude-plugin", "plugin.json")
+	data, err := os.ReadFile(pluginJSONPath)
+	if err != nil {
+		t.Fatalf("plugin.json 읽기 실패: %v", err)
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("plugin.json JSON 파싱 실패: %v", err)
+	}
+
+	// 필수 필드 검증
+	requiredFields := []string{"name", "version", "description"}
+	for _, field := range requiredFields {
+		val, ok := manifest[field]
+		if !ok {
+			t.Errorf("plugin.json에 필수 필드 %q가 없습니다", field)
+			continue
+		}
+		strVal, ok := val.(string)
+		if !ok || strVal == "" {
+			t.Errorf("plugin.json 필드 %q가 빈 문자열이거나 문자열이 아닙니다: %v", field, val)
+		}
+	}
+
+	// name이 "autopus"인지 확인
+	if name, _ := manifest["name"].(string); name != "autopus" {
+		t.Errorf("plugin.json name = %q, want %q", name, "autopus")
+	}
+}
+
+// TestInstallPluginTo_MCPConfig는 설치된 .mcp.json에 autopus 서버 설정이 포함되어 있는지 검증합니다.
+func TestInstallPluginTo_MCPConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := InstallPluginTo(tmpDir); err != nil {
+		t.Fatalf("InstallPluginTo() 실패: %v", err)
+	}
+
+	mcpPath := filepath.Join(tmpDir, ".mcp.json")
+	data, err := os.ReadFile(mcpPath)
+	if err != nil {
+		t.Fatalf(".mcp.json 읽기 실패: %v", err)
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatalf(".mcp.json JSON 파싱 실패: %v", err)
+	}
+
+	// mcpServers 필드 존재 확인
+	mcpServers, ok := config["mcpServers"].(map[string]interface{})
+	if !ok {
+		t.Fatal(".mcp.json에 mcpServers 필드가 없거나 올바른 타입이 아닙니다")
+	}
+
+	// autopus 서버 설정 확인
+	autopus, ok := mcpServers["autopus"].(map[string]interface{})
+	if !ok {
+		t.Fatal(".mcp.json에 autopus 서버 설정이 없습니다")
+	}
+
+	// command 확인
+	command, ok := autopus["command"].(string)
+	if !ok || command == "" {
+		t.Errorf("autopus command가 비어있거나 문자열이 아닙니다: %v", autopus["command"])
+	}
+	if command != "autopus-bridge" {
+		t.Errorf("autopus command = %q, want %q", command, "autopus-bridge")
+	}
+
+	// args 확인
+	args, ok := autopus["args"].([]interface{})
+	if !ok {
+		t.Fatal("autopus args가 배열이 아닙니다")
+	}
+	if len(args) == 0 {
+		t.Error("autopus args가 비어있습니다")
+	}
+	if len(args) > 0 {
+		if firstArg, ok := args[0].(string); !ok || firstArg != "mcp-serve" {
+			t.Errorf("autopus args[0] = %v, want %q", args[0], "mcp-serve")
+		}
+	}
+}
+
+// TestInstallPluginTo_Idempotent는 이미 설치된 디렉토리에 다시 설치해도 에러가 발생하지 않는지 검증합니다.
+func TestInstallPluginTo_Idempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// 첫 번째 설치
+	if err := InstallPluginTo(tmpDir); err != nil {
+		t.Fatalf("첫 번째 InstallPluginTo() 실패: %v", err)
+	}
+
+	// 두 번째 설치 (덮어쓰기)
+	if err := InstallPluginTo(tmpDir); err != nil {
+		t.Fatalf("두 번째 InstallPluginTo() 실패 (멱등성 위반): %v", err)
+	}
+
+	// 파일이 여전히 존재하는지 확인
+	pluginJSONPath := filepath.Join(tmpDir, ".claude-plugin", "plugin.json")
+	if _, err := os.Stat(pluginJSONPath); os.IsNotExist(err) {
+		t.Error("두 번째 설치 후 plugin.json이 사라졌습니다")
+	}
+
+	// plugin.json이 여전히 유효한 JSON인지 확인
+	data, err := os.ReadFile(pluginJSONPath)
+	if err != nil {
+		t.Fatalf("plugin.json 읽기 실패: %v", err)
+	}
+
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Errorf("두 번째 설치 후 plugin.json이 유효하지 않은 JSON: %v", err)
+	}
+}
+
+// TestPluginVersion은 PluginVersion()이 임베디드 plugin.json의 올바른 버전 문자열을 반환하는지 검증합니다.
+func TestPluginVersion(t *testing.T) {
+	version := PluginVersion()
+
+	// "unknown"이 아닌 유효한 버전이어야 합니다
+	if version == "unknown" {
+		t.Fatal("PluginVersion()이 'unknown'을 반환했습니다. 임베디드 plugin.json을 읽지 못했습니다")
+	}
+
+	// 빈 문자열이 아니어야 합니다
+	if version == "" {
+		t.Fatal("PluginVersion()이 빈 문자열을 반환했습니다")
+	}
+
+	// 시맨틱 버전 형식인지 간단히 검증 (X.Y.Z)
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		t.Errorf("PluginVersion() = %q, 시맨틱 버전 형식(X.Y.Z)이 아닙니다", version)
+	}
+
+	// 임베디드 plugin.json에 정의된 실제 버전과 일치하는지 확인
+	expectedVersion := "1.0.0"
+	if version != expectedVersion {
+		t.Errorf("PluginVersion() = %q, want %q", version, expectedVersion)
+	}
+}
+
+// TestIsPluginInstalled_NotInstalled는 플러그인이 설치되지 않은 환경에서 false를 반환하는지 검증합니다.
+func TestIsPluginInstalled_NotInstalled(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	result := IsPluginInstalled()
+	if result {
+		t.Error("IsPluginInstalled() = true, 미설치 환경에서 false를 기대합니다")
+	}
+}
+
+// TestIsPluginInstalled_Installed는 플러그인 설치 후 true를 반환하는지 검증합니다.
+func TestIsPluginInstalled_Installed(t *testing.T) {
+	tmpDir := t.TempDir()
+	t.Setenv("HOME", tmpDir)
+
+	// InstallPluginTo를 사용하여 ~/.claude/plugins/autopus/ 에 해당하는 경로에 설치
+	pluginDir := filepath.Join(tmpDir, ".claude", "plugins", "autopus")
+	if err := InstallPluginTo(pluginDir); err != nil {
+		t.Fatalf("InstallPluginTo() 실패: %v", err)
+	}
+
+	result := IsPluginInstalled()
+	if !result {
+		t.Error("IsPluginInstalled() = false, 설치 후 true를 기대합니다")
 	}
 }
 

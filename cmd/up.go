@@ -491,6 +491,24 @@ func stepAIToolMCPConfig(providers []providerInfo, scanner *bufio.Scanner) {
 
 		switch p.Name {
 		case "Claude":
+			// 플러그인 설치 확인
+			if !aitools.IsPluginInstalled() {
+				fmt.Printf("  Claude Code Autopus 플러그인을 설치할까요? (Y/n): ")
+				if scanYesNoDefault(scanner, true) {
+					if err := aitools.InstallPlugin(); err != nil {
+						printError(fmt.Sprintf("플러그인 설치 실패: %v", err))
+					} else {
+						printSuccess(fmt.Sprintf("Autopus 플러그인 설치 완료 (v%s)", aitools.PluginVersion()))
+						configured++
+					}
+				} else {
+					printSkip("플러그인 설치 건너뜀")
+				}
+			} else {
+				printSuccess(fmt.Sprintf("Autopus 플러그인 이미 설치됨 (v%s)", aitools.PluginVersion()))
+			}
+
+			// 기존 MCP 설정
 			fmt.Printf("  Claude Code MCP 자동 설정을 진행할까요? (Y/n): ")
 			if scanYesNoDefault(scanner, true) {
 				if err := aitools.ConfigureClaudeCodeMCP(""); err != nil {
