@@ -97,6 +97,7 @@ brews:
   # autopus-mcp-server Homebrew 포뮬러
   - ids:
       - autopus-mcp-server
+    name: autopus-mcp-server
     repository:
       owner: insajin
       name: homebrew-tap
