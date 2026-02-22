@@ -16,6 +16,7 @@ import (
 
 	"github.com/insajin/autopus-agent-protocol"
 	"github.com/insajin/autopus-bridge/internal/auth"
+	"github.com/insajin/autopus-bridge/internal/computeruse"
 	"github.com/insajin/autopus-bridge/internal/config"
 	"github.com/insajin/autopus-bridge/internal/executor"
 	"github.com/insajin/autopus-bridge/internal/logger"
@@ -136,6 +137,35 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		Strs("providers", registry.List()).
 		Msg("AI 프로바이더 초기화 완료")
 
+	// SPEC-COMPUTER-USE-002: 컨테이너 풀 초기화 (Docker 사용 가능 시)
+	var containerPool *computeruse.ContainerPool
+	cuHandler := computeruse.NewHandler()
+
+	if cfg.ComputerUse.IsContainerMode() {
+		poolCtx, poolCancel := context.WithTimeout(ctx, 60*time.Second)
+		pool, poolErr := computeruse.InitContainerPool(poolCtx, computeruse.ComputerUseConfigInput{
+			MaxContainers:   cfg.ComputerUse.MaxContainers,
+			WarmPoolSize:    cfg.ComputerUse.WarmPoolSize,
+			Image:           cfg.ComputerUse.Image,
+			ContainerMemory: cfg.ComputerUse.ContainerMemory,
+			ContainerCPU:    cfg.ComputerUse.ContainerCPU,
+			IdleTimeout:     cfg.ComputerUse.IdleTimeout,
+			Network:         cfg.ComputerUse.Network,
+		})
+		poolCancel()
+
+		if poolErr != nil {
+			logger.Warn().Err(poolErr).Msg("컨테이너 풀 초기화 실패, 로컬 모드로 폴백")
+		} else {
+			containerPool = pool
+			cuHandler = computeruse.NewHandler(computeruse.WithContainerPool(pool))
+			logger.Info().
+				Int("max_containers", cfg.ComputerUse.MaxContainers).
+				Int("warm_pool_size", cfg.ComputerUse.WarmPoolSize).
+				Msg("컨테이너 풀 초기화 완료")
+		}
+	}
+
 	// 버전 정보 가져오기
 	version, _, _ := GetVersionInfo()
 	if version == "" {
@@ -184,6 +214,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		client,
 		websocket.WithTaskExecutor(taskExecutor),
 		websocket.WithMCPStarter(mcpAdapter),
+		websocket.WithComputerUseHandler(cuHandler),
 		websocket.WithErrorHandler(func(err error) {
 			logger.Error().Err(err).Msg("메시지 처리 오류")
 		}),
@@ -214,6 +245,16 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	go func() {
 		defer wg.Done()
 		defer mcpManager.StopAll() // MCP 서버 정리 (SPEC-SKILL-V2-001 Block D)
+		// SPEC-COMPUTER-USE-002: 컨테이너 풀 종료
+		if containerPool != nil {
+			defer func() {
+				shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer shutdownCancel()
+				if err := containerPool.Shutdown(shutdownCtx); err != nil {
+					logger.Error().Err(err).Msg("컨테이너 풀 종료 중 오류")
+				}
+			}()
+		}
 		runEventLoop(ctx, cancel, client, taskExecutor, connState, sigCh)
 	}()
 
@@ -244,6 +285,13 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	// 하트비트 시작 (REQ-E-06)
 	client.StartHeartbeat(ctx)
+
+	// SPEC-COMPUTER-USE-002: Computer Use 백그라운드 고루틴 시작
+	go cuHandler.SessionManager().StartCleanupLoop(ctx)
+	if containerPool != nil {
+		go containerPool.StartReplenisher(ctx)
+		go containerPool.StartHealthMonitor(ctx)
+	}
 
 	// FR-P2-03: 네트워크 변경 감지 시작
 	networkMonitor := websocket.NewNetworkMonitor(client, 5*time.Second)

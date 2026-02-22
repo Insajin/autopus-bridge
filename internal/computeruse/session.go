@@ -96,6 +96,49 @@ func (sm *SessionManager) CreateSession(executionID, sessionID string, viewportW
 	return session, nil
 }
 
+// CreateContainerSession은 컨테이너 기반 브라우저 세션을 생성한다.
+// containerInfo로부터 ContainerBrowserBackend을 생성하여 세션에 할당한다.
+func (sm *SessionManager) CreateContainerSession(executionID, sessionID string, viewportW, viewportH int, headless bool, initialURL string, containerInfo *ContainerInfo) (*Session, error) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	// 동시 세션 수 제한 확인
+	if len(sm.sessions) >= sm.maxPerWorkspace {
+		return nil, fmt.Errorf("maximum concurrent sessions reached (%d)", sm.maxPerWorkspace)
+	}
+
+	// 중복 세션 확인
+	if _, exists := sm.sessions[sessionID]; exists {
+		return nil, fmt.Errorf("session %s already exists", sessionID)
+	}
+
+	// 뷰포트 기본값 적용
+	if viewportW <= 0 {
+		viewportW = 1280
+	}
+	if viewportH <= 0 {
+		viewportH = 720
+	}
+
+	now := time.Now()
+	session := &Session{
+		ID:           sessionID,
+		ExecutionID:  executionID,
+		Backend:      NewContainerBrowserBackend(containerInfo, viewportW, viewportH),
+		ContainerID:  containerInfo.ID,
+		CreatedAt:    now,
+		LastActiveAt: now,
+		URL:          initialURL,
+		ViewportW:    viewportW,
+		ViewportH:    viewportH,
+		Headless:     headless,
+	}
+
+	sm.sessions[sessionID] = session
+
+	return session, nil
+}
+
 // GetSession returns the session with the given ID, if it exists.
 func (sm *SessionManager) GetSession(sessionID string) (*Session, bool) {
 	sm.mu.RLock()

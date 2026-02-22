@@ -56,17 +56,45 @@ func (h *Handler) HandleSessionStart(ctx context.Context, payload ws.ComputerSes
 	log.Printf("[computer-use] starting session %s (execution=%s, viewport=%dx%d, headless=%v)",
 		payload.SessionID, payload.ExecutionID, payload.ViewportW, payload.ViewportH, payload.Headless)
 
-	// Create a new session.
-	session, err := h.sessionMgr.CreateSession(
-		payload.ExecutionID,
-		payload.SessionID,
-		payload.ViewportW,
-		payload.ViewportH,
-		payload.Headless,
-		payload.URL,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create session: %w", err)
+	// 세션 생성 (컨테이너 모드 또는 로컬 모드)
+	var session *Session
+	var err error
+
+	if h.pool != nil {
+		// 컨테이너 모드: 풀에서 컨테이너 할당
+		containerInfo, acqErr := h.pool.Acquire(ctx, payload.SessionID)
+		if acqErr != nil {
+			return fmt.Errorf("failed to acquire container: %w", acqErr)
+		}
+
+		// 컨테이너 기반 세션 생성
+		session, err = h.sessionMgr.CreateContainerSession(
+			payload.ExecutionID,
+			payload.SessionID,
+			payload.ViewportW,
+			payload.ViewportH,
+			payload.Headless,
+			payload.URL,
+			containerInfo,
+		)
+		if err != nil {
+			// 세션 생성 실패 시 할당된 컨테이너 해제
+			_ = h.pool.Release(ctx, payload.SessionID)
+			return fmt.Errorf("failed to create container session: %w", err)
+		}
+	} else {
+		// 로컬 모드 (기존 로직)
+		session, err = h.sessionMgr.CreateSession(
+			payload.ExecutionID,
+			payload.SessionID,
+			payload.ViewportW,
+			payload.ViewportH,
+			payload.Headless,
+			payload.URL,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to create session: %w", err)
+		}
 	}
 
 	// 브라우저 실행
@@ -175,6 +203,16 @@ func (h *Handler) GetPoolStatusPayload() *ws.ComputerPoolStatusPayload {
 // HandleSessionEnd processes computer_session_end messages.
 func (h *Handler) HandleSessionEnd(ctx context.Context, payload ws.ComputerSessionPayload) error {
 	log.Printf("[computer-use] ending session %s", payload.SessionID)
+
+	// 컨테이너 모드일 때 풀에서 컨테이너 해제
+	if h.pool != nil {
+		session, exists := h.sessionMgr.GetSession(payload.SessionID)
+		if exists && session.ContainerID != "" {
+			if err := h.pool.Release(ctx, payload.SessionID); err != nil {
+				log.Printf("[computer-use] failed to release container for session %s: %v", payload.SessionID, err)
+			}
+		}
+	}
 
 	if err := h.sessionMgr.EndSession(payload.SessionID); err != nil {
 		return fmt.Errorf("failed to end session: %w", err)
