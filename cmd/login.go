@@ -47,7 +47,7 @@ var loginCmd = &cobra.Command{
 브라우저 로그인 또는 Device Code Flow를 선택할 수 있습니다.
 비대화형 환경에서는 --device-code 플래그를 사용하세요.
 
-토큰은 ~/.config/local-agent-bridge/credentials.json에 저장됩니다.
+토큰은 ~/.config/autopus/credentials.json에 저장됩니다.
 이후 'lab connect' 명령 시 저장된 토큰이 자동으로 사용됩니다.`,
 	RunE: runLogin,
 }

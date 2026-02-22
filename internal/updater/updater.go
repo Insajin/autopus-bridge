@@ -373,7 +373,7 @@ func getConfigDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("홈 디렉토리를 찾을 수 없습니다: %w", err)
 	}
-	return filepath.Join(home, ".config", "local-agent-bridge"), nil
+	return filepath.Join(home, ".config", "autopus"), nil
 }
 
 // saveLastCheckTime는 현재 시간을 마지막 확인 시간으로 저장합니다.

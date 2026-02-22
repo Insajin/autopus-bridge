@@ -94,7 +94,7 @@ ssh -N -L 8765:bridge:8765 bridge@<서버-IP> -p 2222
 | 볼륨 | 컨테이너 경로 | 설명 |
 |------|---------------|------|
 | `./workspace` | `/workspace` | AI 에이전트 작업 디렉토리 |
-| `bridge-config` | `/root/.config/local-agent-bridge` | Bridge 내부 설정 (named volume) |
+| `bridge-config` | `/root/.config/autopus` | Bridge 내부 설정 (named volume) |
 | `./ssh-keys` | `/config/authorized_keys` | SSH 공개 키 (읽기 전용) |
 
 ## 보안 고려사항

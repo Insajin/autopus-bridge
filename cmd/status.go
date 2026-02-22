@@ -196,7 +196,7 @@ func printStatusFull(status *StatusInfo) error {
 	// 안내 메시지
 	if !status.Connected {
 		fmt.Println("서버에 연결하려면:")
-		fmt.Println("  local-agent-bridge connect --token <JWT_TOKEN>")
+		fmt.Println("  autopus connect --token <JWT_TOKEN>")
 	}
 
 	return nil
@@ -208,7 +208,7 @@ func getStatusFilePath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "local-agent-bridge", "status.json")
+	return filepath.Join(home, ".config", "autopus", "status.json")
 }
 
 // isProcessRunning은 주어진 PID의 프로세스가 실행 중인지 확인합니다.

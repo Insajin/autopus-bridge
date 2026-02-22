@@ -1018,7 +1018,7 @@ func printFixSuggestion(stepName string, err error) {
 		fmt.Println("    2. 계정에 워크스페이스 접근 권한이 있는지 확인하세요")
 		fmt.Println("    3. 'autopus-bridge login'으로 재로그인 후 다시 시도하세요")
 	case "config":
-		fmt.Println("    1. ~/.config/local-agent-bridge/ 디렉토리 쓰기 권한을 확인하세요")
+		fmt.Println("    1. ~/.config/autopus/ 디렉토리 쓰기 권한을 확인하세요")
 		fmt.Println("    2. 'autopus-bridge setup'으로 수동 설정을 시도하세요")
 	default:
 		fmt.Println("    1. 'autopus-bridge up --force'로 처음부터 다시 시도하세요")
@@ -1041,7 +1041,7 @@ func upProgressFilePath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "local-agent-bridge", ".up-progress.json")
+	return filepath.Join(home, ".config", "autopus", ".up-progress.json")
 }
 
 // loadUpProgress reads progress from the temp file.

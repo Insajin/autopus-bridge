@@ -21,7 +21,7 @@ var configCmd = &cobra.Command{
 	Short: "설정을 관리합니다",
 	Long: `설정 파일의 값을 조회하거나 수정합니다.
 
-설정 파일 위치: ~/.config/local-agent-bridge/config.yaml
+설정 파일 위치: ~/.config/autopus/config.yaml
 
 주의: API 키는 환경변수로 설정하는 것을 권장합니다.
   - CLAUDE_API_KEY: Claude API 키
@@ -37,9 +37,9 @@ var configSetCmd = &cobra.Command{
 
 키는 점(.)으로 구분된 경로를 사용합니다.
 예시:
-  local-agent-bridge config set server.url wss://custom.server.io/ws/agent
-  local-agent-bridge config set logging.level debug
-  local-agent-bridge config set reconnection.max_attempts 5
+  autopus config set server.url wss://custom.server.io/ws/agent
+  autopus config set logging.level debug
+  autopus config set reconnection.max_attempts 5
 
 지원하는 설정 키:
   server.url              - WebSocket 서버 URL
@@ -63,8 +63,8 @@ var configGetCmd = &cobra.Command{
 
 키는 점(.)으로 구분된 경로를 사용합니다.
 예시:
-  local-agent-bridge config get server.url
-  local-agent-bridge config get logging.level`,
+  autopus config get server.url
+  autopus config get logging.level`,
 	Args: cobra.ExactArgs(1),
 	RunE: runConfigGet,
 }
@@ -94,7 +94,7 @@ var configPathCmd = &cobra.Command{
 var configInitCmd = &cobra.Command{
 	Use:   "init",
 	Short: "기본 설정 파일을 생성합니다",
-	Long: `기본 설정 파일을 ~/.config/local-agent-bridge/config.yaml에 생성합니다.
+	Long: `기본 설정 파일을 ~/.config/autopus/config.yaml에 생성합니다.
 
 이미 파일이 존재하면 덮어쓰지 않습니다.
 강제로 덮어쓰려면 --force 플래그를 사용하세요.`,
@@ -224,14 +224,14 @@ func runConfigInit(cmd *cobra.Command, args []string) error {
 
 	// 기본 설정 파일 내용
 	defaultConfig := `# Autopus Local Bridge 설정 파일
-# 생성됨: local-agent-bridge config init
+# 생성됨: autopus config init
 
 server:
   url: "wss://api.autopus.co/ws/agent"
   timeout_seconds: 30
 
 auth:
-  token_file: "~/.config/local-agent-bridge/token"
+  token_file: "~/.config/autopus/token"
 
 providers:
   claude:

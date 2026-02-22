@@ -96,8 +96,8 @@ brew install autopus/tap/autopus-bridge
 
 ### What Stays the Same
 
-- **Configuration file location**: `~/.config/local-agent-bridge/config.yaml` (unchanged)
-- **Credentials location**: `~/.config/local-agent-bridge/credentials.json` (unchanged)
+- **Configuration file location**: `~/.config/autopus/config.yaml` (changed from `~/.config/local-agent-bridge/`)
+- **Credentials location**: `~/.config/autopus/credentials.json` (changed from `~/.config/local-agent-bridge/`)
 - **Environment variables**: All `LAB_` prefixed variables work the same way
 - **All commands**: `connect`, `status`, `up`, `setup`, `login`, `dashboard`, `tools`, `update`, `version`, `config`
 - **WebSocket protocol**: Fully compatible with existing Autopus server instances
@@ -167,7 +167,7 @@ The old monorepo will remain accessible but will not be updated. We recommend mi
 
 ### Do I need to re-authenticate after upgrading the bridge?
 
-No. Existing credentials at `~/.config/local-agent-bridge/credentials.json` are fully compatible with the new binary.
+No. Existing credentials at `~/.config/autopus/credentials.json` are fully compatible with the new binary. If upgrading from `local-agent-bridge`, move your credentials from `~/.config/local-agent-bridge/` to `~/.config/autopus/`.
 
 ### What if I encounter issues during migration?
 

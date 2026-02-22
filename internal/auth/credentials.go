@@ -33,7 +33,7 @@ func (c *Credentials) IsValid() bool {
 }
 
 // credentialsDir returns the directory for storing credentials.
-// Uses ~/.config/local-agent-bridge on Unix-like systems.
+// Uses ~/.config/autopus on Unix-like systems.
 func credentialsDir() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -46,7 +46,7 @@ func credentialsDir() (string, error) {
 		configDir = filepath.Join(home, ".config")
 	}
 
-	dir := filepath.Join(configDir, "local-agent-bridge")
+	dir := filepath.Join(configDir, "autopus")
 	return dir, nil
 }
 

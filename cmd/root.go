@@ -25,7 +25,7 @@ var (
 
 // rootCmd는 CLI의 루트 명령어입니다.
 var rootCmd = &cobra.Command{
-	Use:   "local-agent-bridge",
+	Use:   "autopus",
 	Short: "Autopus Local Bridge CLI",
 	Long: `Autopus Local Bridge는 Autopus 서버와 WebSocket으로 통신하여
 사용자의 로컬 AI 에이전트를 연결합니다.
@@ -60,7 +60,7 @@ func init() {
 
 	// 전역 플래그 정의
 	rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "",
-		"설정 파일 경로 (기본값: ~/.config/local-agent-bridge/config.yaml)")
+		"설정 파일 경로 (기본값: ~/.config/autopus/config.yaml)")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false,
 		"상세 로그 출력 (debug 레벨)")
 }
@@ -72,14 +72,14 @@ func initConfig() {
 		// 명시적 설정 파일 사용
 		viper.SetConfigFile(cfgFile)
 	} else {
-		// 기본 설정 경로: ~/.config/local-agent-bridge/config.yaml
+		// 기본 설정 경로: ~/.config/autopus/config.yaml
 		home, err := os.UserHomeDir()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "홈 디렉토리를 찾을 수 없습니다: %v\n", err)
 			os.Exit(1)
 		}
 
-		configDir := filepath.Join(home, ".config", "local-agent-bridge")
+		configDir := filepath.Join(home, ".config", "autopus")
 		viper.AddConfigPath(configDir)
 		viper.SetConfigName("config")
 		viper.SetConfigType("yaml")
@@ -109,7 +109,7 @@ func setDefaults() {
 
 	// 인증 설정
 	home, _ := os.UserHomeDir()
-	viper.SetDefault("auth.token_file", filepath.Join(home, ".config", "local-agent-bridge", "token"))
+	viper.SetDefault("auth.token_file", filepath.Join(home, ".config", "autopus", "token"))
 
 	// Claude 프로바이더 설정
 	viper.SetDefault("providers.claude.api_key_env", "CLAUDE_API_KEY")

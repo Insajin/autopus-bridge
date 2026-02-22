@@ -10,13 +10,13 @@ import (
 )
 
 // DefaultPluginsDir는 기본 플러그인 디렉토리 경로를 반환합니다.
-// ~/.config/local-agent-bridge/plugins/
+// ~/.config/autopus/plugins/
 func DefaultPluginsDir() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(homeDir, ".config", "local-agent-bridge", "plugins")
+	return filepath.Join(homeDir, ".config", "autopus", "plugins")
 }
 
 // Loader는 플러그인 디렉토리에서 플러그인을 탐색하고 로드합니다.

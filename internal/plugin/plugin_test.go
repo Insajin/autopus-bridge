@@ -465,7 +465,7 @@ func TestDefaultPluginsDir(t *testing.T) {
 	dir := DefaultPluginsDir()
 	// 홈 디렉토리를 가져올 수 있으면 경로가 비어있지 않아야 함
 	if homeDir, err := os.UserHomeDir(); err == nil {
-		expected := filepath.Join(homeDir, ".config", "local-agent-bridge", "plugins")
+		expected := filepath.Join(homeDir, ".config", "autopus", "plugins")
 		if dir != expected {
 			t.Errorf("기본 플러그인 디렉토리가 일치하지 않습니다: got %s, want %s", dir, expected)
 		}

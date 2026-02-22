@@ -61,7 +61,7 @@ Once connected, the bridge receives task requests from the Autopus platform and 
 
 ### Config File
 
-Default location: `~/.config/local-agent-bridge/config.yaml`
+Default location: `~/.config/autopus/config.yaml`
 
 ```yaml
 server:
@@ -122,7 +122,7 @@ All configuration keys can be overridden with environment variables using the `L
 
 ### Credentials
 
-Authentication tokens are stored at `~/.config/local-agent-bridge/credentials.json` after running `login`.
+Authentication tokens are stored at `~/.config/autopus/credentials.json` after running `login`.
 
 ## Architecture Overview
 

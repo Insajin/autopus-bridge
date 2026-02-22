@@ -42,7 +42,7 @@ func TestSave_SavesCredentialsToFile(t *testing.T) {
 	}
 
 	// 파일이 생성되었는지 확인
-	expectedPath := filepath.Join(tmpDir, "local-agent-bridge", "credentials.json")
+	expectedPath := filepath.Join(tmpDir, "autopus", "credentials.json")
 	data, err := os.ReadFile(expectedPath)
 	if err != nil {
 		t.Fatalf("credentials 파일 읽기 실패: %v", err)
@@ -79,7 +79,7 @@ func TestSave_CreatesDirectoryIfNeeded(t *testing.T) {
 	tmpDir := setupTestEnv(t)
 
 	// 디렉터리가 아직 존재하지 않는 것을 확인
-	dirPath := filepath.Join(tmpDir, "local-agent-bridge")
+	dirPath := filepath.Join(tmpDir, "autopus")
 	if _, err := os.Stat(dirPath); !os.IsNotExist(err) {
 		t.Fatal("테스트 전에 디렉터리가 이미 존재합니다")
 	}
@@ -113,7 +113,7 @@ func TestSave_FilePermissions(t *testing.T) {
 		t.Fatalf("Save() error = %v", err)
 	}
 
-	filePath := filepath.Join(tmpDir, "local-agent-bridge", "credentials.json")
+	filePath := filepath.Join(tmpDir, "autopus", "credentials.json")
 	info, err := os.Stat(filePath)
 	if err != nil {
 		t.Fatalf("파일 정보 확인 실패: %v", err)
@@ -177,7 +177,7 @@ func TestLoad_HandlesInvalidJSON(t *testing.T) {
 	tmpDir := setupTestEnv(t)
 
 	// 잘못된 JSON을 직접 작성
-	dir := filepath.Join(tmpDir, "local-agent-bridge")
+	dir := filepath.Join(tmpDir, "autopus")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		t.Fatalf("디렉터리 생성 실패: %v", err)
 	}
@@ -206,7 +206,7 @@ func TestClear_RemovesCredentialsFile(t *testing.T) {
 	}
 
 	// 파일 존재 확인
-	filePath := filepath.Join(tmpDir, "local-agent-bridge", "credentials.json")
+	filePath := filepath.Join(tmpDir, "autopus", "credentials.json")
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		t.Fatal("Clear 전에 파일이 존재하지 않습니다")
 	}

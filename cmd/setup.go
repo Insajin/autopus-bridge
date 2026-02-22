@@ -39,7 +39,7 @@ var setupCmd = &cobra.Command{
   2. API 키 환경변수 확인
   3. 서버 URL 설정
   4. 작업 디렉토리 설정
-  5. 설정 파일 생성 (~/.config/local-agent-bridge/config.yaml)
+  5. 설정 파일 생성 (~/.config/autopus/config.yaml)
 
 이미 설정 파일이 존재하면 덮어쓸지 확인합니다.`,
 	RunE: runSetup,
@@ -442,7 +442,7 @@ func writeSetupConfig(configPath string, providers []providerInfo, serverURL, wo
 			TimeoutSeconds: 30,
 		},
 		Auth: setupAuthConfig{
-			TokenFile: "~/.config/local-agent-bridge/token",
+			TokenFile: "~/.config/autopus/token",
 		},
 		Providers: setupProvidersConfig{
 			Claude: setupProviderEntry{
@@ -484,7 +484,7 @@ func writeSetupConfig(configPath string, providers []providerInfo, serverURL, wo
 	// 헤더 주석 추가
 	header := "# Autopus Local Bridge 설정 파일\n"
 	header += "# 생성됨: autopus-bridge setup\n"
-	header += "# 문서: https://docs.autopus.co/local-agent-bridge\n\n"
+	header += "# 문서: https://docs.autopus.co/autopus\n\n"
 
 	content := header + string(yamlData)
 

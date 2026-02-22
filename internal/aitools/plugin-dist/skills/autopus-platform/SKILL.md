@@ -220,7 +220,7 @@ autopus-bridge up --force
 
 ## Configuration
 
-Config file: `~/.config/local-agent-bridge/config.yaml`
+Config file: `~/.config/autopus/config.yaml`
 
 Key settings:
 - `server.url`: WebSocket server URL

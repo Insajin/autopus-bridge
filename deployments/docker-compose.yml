@@ -11,7 +11,7 @@ services:
       - AUTOPUS_WORKSPACE=${AUTOPUS_WORKSPACE}
     volumes:
       - ./workspace:/workspace
-      - bridge-config:/root/.config/local-agent-bridge
+      - bridge-config:/root/.config/autopus
     ports:
       - "127.0.0.1:8765:8765"  # SSH tunnel endpoint
     networks:

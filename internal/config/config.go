@@ -382,7 +382,7 @@ func EnsureConfigDir() error {
 		return fmt.Errorf("홈 디렉토리를 찾을 수 없습니다: %w", err)
 	}
 
-	configDir := filepath.Join(home, ".config", "local-agent-bridge")
+	configDir := filepath.Join(home, ".config", "autopus")
 	if err := os.MkdirAll(configDir, 0700); err != nil {
 		return fmt.Errorf("설정 디렉토리 생성 실패: %w", err)
 	}
@@ -396,5 +396,5 @@ func DefaultConfigPath() string {
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "local-agent-bridge", "config.yaml")
+	return filepath.Join(home, ".config", "autopus", "config.yaml")
 }

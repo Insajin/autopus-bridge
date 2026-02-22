@@ -35,7 +35,7 @@ Claude Code가 Autopus 플랫폼 기능에 MCP 도구/리소스로 접근할 수
   {
     "mcpServers": {
       "autopus": {
-        "command": "local-agent-bridge",
+        "command": "autopus",
         "args": ["mcp-serve"]
       }
     }
@@ -60,7 +60,7 @@ func runMCPServe(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("인증 정보를 읽을 수 없습니다: %w", err)
 	}
 	if creds == nil {
-		return fmt.Errorf("인증 정보가 없습니다. 먼저 'local-agent-bridge login'으로 로그인하세요")
+		return fmt.Errorf("인증 정보가 없습니다. 먼저 'autopus login'으로 로그인하세요")
 	}
 
 	logger.Info().
