@@ -19,6 +19,7 @@ type toolCategory string
 const (
 	toolCategoryEssential   toolCategory = "essential"
 	toolCategoryRecommended toolCategory = "recommended"
+	toolCategoryDeveloper   toolCategory = "developer"
 	toolCategoryOptional    toolCategory = "optional"
 )
 
@@ -95,6 +96,15 @@ func getBusinessToolManifest() []businessTool {
 			},
 		},
 		{
+			Name:     "node",
+			Category: toolCategoryEssential,
+			Purpose:  "JavaScript 런타임 (AI CLI 필수)",
+			InstallCmd: map[string]string{
+				"darwin": "brew install node",
+				"linux":  "curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - && sudo apt-get install -y nodejs",
+			},
+		},
+		{
 			Name:     "csvkit",
 			Category: toolCategoryRecommended,
 			Purpose:  "CSV 처리 (csvstat, csvsql)",
@@ -137,6 +147,51 @@ func getBusinessToolManifest() []businessTool {
 			InstallCmd: map[string]string{
 				"darwin": "brew install d2",
 				"linux":  "curl -fsSL https://d2lang.com/install.sh | sh -s --",
+			},
+		},
+		{
+			Name:     "jq",
+			Category: toolCategoryDeveloper,
+			Purpose:  "JSON 처리",
+			InstallCmd: map[string]string{
+				"darwin": "brew install jq",
+				"linux":  "sudo apt-get install -y jq",
+			},
+		},
+		{
+			Name:     "yq",
+			Category: toolCategoryDeveloper,
+			Purpose:  "YAML 처리",
+			InstallCmd: map[string]string{
+				"darwin": "brew install yq",
+				"linux":  "sudo apt-get install -y yq",
+			},
+		},
+		{
+			Name:     "gh",
+			Category: toolCategoryDeveloper,
+			Purpose:  "GitHub CLI",
+			InstallCmd: map[string]string{
+				"darwin": "brew install gh",
+				"linux":  "sudo apt-get install -y gh",
+			},
+		},
+		{
+			Name:     "rg",
+			Category: toolCategoryDeveloper,
+			Purpose:  "ripgrep 고속 검색",
+			InstallCmd: map[string]string{
+				"darwin": "brew install ripgrep",
+				"linux":  "sudo apt-get install -y ripgrep",
+			},
+		},
+		{
+			Name:     "fzf",
+			Category: toolCategoryDeveloper,
+			Purpose:  "퍼지 파인더",
+			InstallCmd: map[string]string{
+				"darwin": "brew install fzf",
+				"linux":  "sudo apt-get install -y fzf",
 			},
 		},
 		{
@@ -205,6 +260,18 @@ func getToolVersion(name string) string {
 		cmd = exec.Command("hledger", "--version")
 	case "wkhtmltopdf":
 		cmd = exec.Command("wkhtmltopdf", "--version")
+	case "node":
+		cmd = exec.Command("node", "--version")
+	case "jq":
+		cmd = exec.Command("jq", "--version")
+	case "yq":
+		cmd = exec.Command("yq", "--version")
+	case "gh":
+		cmd = exec.Command("gh", "--version")
+	case "rg":
+		cmd = exec.Command("rg", "--version")
+	case "fzf":
+		cmd = exec.Command("fzf", "--version")
 	default:
 		return ""
 	}
@@ -234,6 +301,7 @@ func runToolsList(cmd *cobra.Command, args []string) error {
 	}{
 		{toolCategoryEssential, "필수 (Essential)"},
 		{toolCategoryRecommended, "권장 (Recommended)"},
+		{toolCategoryDeveloper, "개발자 (Developer)"},
 		{toolCategoryOptional, "선택 (Optional)"},
 	}
 

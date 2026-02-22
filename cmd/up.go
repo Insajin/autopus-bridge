@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -60,7 +61,7 @@ var upCmd = &cobra.Command{
   [1/9] 인증 확인
   [2/9] 토큰 갱신
   [3/9] 워크스페이스 선택
-  [4/9] AI Provider 감지
+  [4/9] AI Provider 감지 및 설치
   [5/9] 비즈니스 도구 감지
   [6/9] 미설치 도구 설치
   [7/9] AI 도구 MCP 설정
@@ -177,10 +178,11 @@ func runUp(cmd *cobra.Command, args []string) error {
 		saveUpProgress(progress, 0, "")
 	}
 
-	// ── Step 4: Provider Detection ──
-	printStep(4, totalUpSteps, "AI Provider 감지 중...")
+	// ── Step 4: Provider Detection + AI CLI Installation ──
+	printStep(4, totalUpSteps, "AI Provider 감지 및 설치 중...")
 	providers := detectProviders()
 	printProviderSummary(providers)
+	providers = stepInstallMissingAICLI(providers, scanner)
 	markStepCompleted(progress, 4)
 	saveUpProgress(progress, 0, "")
 
@@ -431,13 +433,15 @@ func stepInstallMissingTools(tools []businessTool, scanner *bufio.Scanner) {
 		return
 	}
 
-	// 필수 도구와 권장 도구 분리
+	// 필수 도구, 권장 도구, 개발자 도구 분리
 	var essentialMissing, recommendedMissing []businessTool
 	for _, t := range missing {
 		switch t.Category {
 		case toolCategoryEssential:
 			essentialMissing = append(essentialMissing, t)
 		case toolCategoryRecommended:
+			recommendedMissing = append(recommendedMissing, t)
+		case toolCategoryDeveloper:
 			recommendedMissing = append(recommendedMissing, t)
 		}
 	}
@@ -478,6 +482,111 @@ func stepInstallMissingTools(tools []businessTool, scanner *bufio.Scanner) {
 			printSuccess(fmt.Sprintf("%s 설치 완료", t.Name))
 		}
 	}
+}
+
+// aiCLIInfo AI CLI 도구 정보
+type aiCLIInfo struct {
+	Name       string
+	CLIName    string
+	InstallCmd map[string]string
+}
+
+// stepInstallMissingAICLI 미설치 AI CLI 도구 설치를 제안합니다.
+func stepInstallMissingAICLI(providers []providerInfo, scanner *bufio.Scanner) []providerInfo {
+	aiCLIs := []aiCLIInfo{
+		{
+			Name:    "Claude Code",
+			CLIName: "claude",
+			InstallCmd: map[string]string{
+				"darwin": "npm install -g @anthropic-ai/claude-code",
+				"linux":  "npm install -g @anthropic-ai/claude-code",
+			},
+		},
+		{
+			Name:    "Codex CLI",
+			CLIName: "codex",
+			InstallCmd: map[string]string{
+				"darwin": "npm install -g @openai/codex",
+				"linux":  "npm install -g @openai/codex",
+			},
+		},
+		{
+			Name:    "Gemini CLI",
+			CLIName: "gemini",
+			InstallCmd: map[string]string{
+				"darwin": "npm install -g @google/gemini-cli",
+				"linux":  "npm install -g @google/gemini-cli",
+			},
+		},
+	}
+
+	// 미설치 CLI 탐색
+	var missing []aiCLIInfo
+	for _, cli := range aiCLIs {
+		found := false
+		for _, p := range providers {
+			if (p.Name == "Claude" && cli.CLIName == "claude") ||
+				(p.Name == "Codex" && cli.CLIName == "codex") ||
+				(p.Name == "Gemini" && cli.CLIName == "gemini") {
+				if p.HasCLI {
+					found = true
+				}
+				break
+			}
+		}
+		if !found {
+			missing = append(missing, cli)
+		}
+	}
+
+	if len(missing) == 0 {
+		printSuccess("모든 AI CLI 설치됨")
+		return providers
+	}
+
+	// npm 사용 가능 여부 확인
+	if _, err := exec.LookPath("npm"); err != nil {
+		fmt.Println("  ! npm이 설치되어 있지 않습니다. AI CLI 설치에 Node.js가 필요합니다.")
+		if runtime.GOOS == "darwin" {
+			fmt.Println("    brew install node 로 Node.js를 먼저 설치하세요.")
+		} else {
+			fmt.Println("    https://nodejs.org 에서 Node.js를 먼저 설치하세요.")
+		}
+		return providers
+	}
+
+	// 미설치 목록 표시 및 설치 여부 확인
+	fmt.Println()
+	fmt.Println("  미설치 AI CLI:")
+	for _, cli := range missing {
+		fmt.Printf("    [ ] %-14s %s\n", cli.CLIName, cli.Name)
+	}
+	fmt.Printf("\n  %d개 AI CLI를 설치하시겠습니까? (Y/n): ", len(missing))
+
+	if !scanYesNoDefault(scanner, true) {
+		printSkip("AI CLI 설치 건너뜀")
+		return providers
+	}
+
+	osName := runtime.GOOS
+	for _, cli := range missing {
+		installCmd, ok := cli.InstallCmd[osName]
+		if !ok {
+			fmt.Printf("  ! %-14s %s 자동 설치 미지원\n", cli.Name, osName)
+			continue
+		}
+
+		fmt.Printf("  설치 중: %s\n", installCmd)
+		if err := runInstallCommand(installCmd); err != nil {
+			printError(fmt.Sprintf("%s 설치 실패: %v", cli.Name, err))
+		} else {
+			printSuccess(fmt.Sprintf("%s 설치 완료", cli.Name))
+		}
+	}
+
+	// 설치 후 프로바이더 재감지
+	fmt.Println()
+	return detectProviders()
 }
 
 // stepAIToolMCPConfig는 감지된 AI CLI 도구에 Autopus MCP를 설정합니다.
