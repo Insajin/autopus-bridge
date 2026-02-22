@@ -246,12 +246,36 @@ func runUp(cmd *cobra.Command, args []string) error {
 // Step Implementations
 // ─────────────────────────────────────────────────────────────────────────────
 
-// stepAuthCheck loads existing credentials or triggers Device Auth Flow.
+// performBrowserAuthWithFallback attempts browser-based authentication first,
+// then falls back to device code flow if browser auth fails.
+func performBrowserAuthWithFallback() (*auth.Credentials, error) {
+	newCreds, err := performBrowserAuthFlowStandalone()
+	if err != nil {
+		logger.Warn().Err(err).Msg("브라우저 인증 실패, Device Code 방식으로 전환")
+		fmt.Println("  브라우저 인증에 실패했습니다. Device Code 방식으로 전환합니다...")
+		fmt.Println()
+		return performDeviceAuthFlow()
+	}
+	return newCreds, nil
+}
+
+// stepAuthCheck loads existing credentials or triggers browser auth flow.
 // Returns valid credentials or error.
 func stepAuthCheck() (*auth.Credentials, error) {
 	creds, err := auth.Load()
 	if err != nil {
-		return nil, fmt.Errorf("인증 정보 로드 실패: %w", err)
+		// auth.Load failed (corrupt file, permission issue, etc.)
+		// Log warning and proceed to browser auth instead of stopping
+		logger.Warn().Err(err).Msg("인증 정보 로드 실패, 새로 인증을 시작합니다")
+		fmt.Println("  인증 정보를 로드할 수 없습니다. 새로 인증을 시작합니다...")
+		fmt.Println()
+
+		newCreds, authErr := performBrowserAuthWithFallback()
+		if authErr != nil {
+			return nil, authErr
+		}
+		printSuccess(fmt.Sprintf("인증 성공: %s", newCreds.UserEmail))
+		return newCreds, nil
 	}
 
 	// Credentials exist and valid
@@ -266,11 +290,11 @@ func stepAuthCheck() (*auth.Credentials, error) {
 		return creds, nil
 	}
 
-	// No credentials - trigger auth flow (브라우저 또는 Device Code)
-	fmt.Println("  저장된 인증 정보가 없습니다. 인증을 시작합니다...")
+	// No credentials - directly open browser for login/signup
+	fmt.Println("  저장된 인증 정보가 없습니다. 브라우저에서 로그인을 시작합니다...")
 	fmt.Println()
 
-	newCreds, err := performAuthFlow()
+	newCreds, err := performBrowserAuthWithFallback()
 	if err != nil {
 		return nil, err
 	}
@@ -279,7 +303,7 @@ func stepAuthCheck() (*auth.Credentials, error) {
 	return newCreds, nil
 }
 
-// stepTokenRefresh refreshes the token if expired. If refresh fails, triggers Device Auth Flow.
+// stepTokenRefresh refreshes the token if expired. If refresh fails, triggers browser auth flow.
 func stepTokenRefresh(creds *auth.Credentials) (*auth.Credentials, error) {
 	if creds == nil {
 		return nil, fmt.Errorf("인증 정보가 없습니다")
@@ -296,11 +320,11 @@ func stepTokenRefresh(creds *auth.Credentials) (*auth.Credentials, error) {
 		fmt.Println("  토큰이 만료되어 갱신을 시도합니다...")
 		if err := auth.RefreshAccessToken(creds); err != nil {
 			logger.Warn().Err(err).Msg("토큰 자동 갱신 실패, 재인증 시도")
-			fmt.Println("  토큰 갱신 실패. 재인증을 시작합니다...")
+			fmt.Println("  토큰 갱신 실패. 브라우저에서 재인증을 시작합니다...")
 			fmt.Println()
 
-			// Refresh failed - trigger full re-auth (브라우저 또는 Device Code)
-			newCreds, authErr := performAuthFlow()
+			// Refresh failed - directly open browser, fallback to device code
+			newCreds, authErr := performBrowserAuthWithFallback()
 			if authErr != nil {
 				return nil, authErr
 			}
@@ -312,11 +336,11 @@ func stepTokenRefresh(creds *auth.Credentials) (*auth.Credentials, error) {
 		return creds, nil
 	}
 
-	// No refresh token - need full re-auth (브라우저 또는 Device Code)
-	fmt.Println("  갱신 토큰이 없습니다. 재인증을 시작합니다...")
+	// No refresh token - directly open browser, fallback to device code
+	fmt.Println("  갱신 토큰이 없습니다. 브라우저에서 재인증을 시작합니다...")
 	fmt.Println()
 
-	newCreds, err := performAuthFlow()
+	newCreds, err := performBrowserAuthWithFallback()
 	if err != nil {
 		return nil, err
 	}
