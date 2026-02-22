@@ -20,7 +20,8 @@ type PendingResult struct {
 type Session struct {
 	ID           string
 	ExecutionID  string
-	BrowserMgr   *BrowserManager
+	Backend      BrowserBackend   // 브라우저 백엔드 (로컬 또는 컨테이너)
+	ContainerID  string           // 컨테이너 모드일 때 Docker 컨테이너 ID (빈 문자열이면 로컬)
 	CreatedAt    time.Time
 	LastActiveAt time.Time
 	URL          string
@@ -81,7 +82,7 @@ func (sm *SessionManager) CreateSession(executionID, sessionID string, viewportW
 	session := &Session{
 		ID:           sessionID,
 		ExecutionID:  executionID,
-		BrowserMgr:   NewBrowserManager(viewportW, viewportH, headless),
+		Backend:      NewBrowserManager(viewportW, viewportH, headless),
 		CreatedAt:    now,
 		LastActiveAt: now,
 		URL:          initialURL,
@@ -114,9 +115,9 @@ func (sm *SessionManager) EndSession(sessionID string) error {
 		return fmt.Errorf("session %s not found", sessionID)
 	}
 
-	// Close the browser.
-	if session.BrowserMgr != nil {
-		if err := session.BrowserMgr.Close(); err != nil {
+	// 브라우저 종료
+	if session.Backend != nil {
+		if err := session.Backend.Close(); err != nil {
 			log.Printf("[computer-use] failed to close browser for session %s: %v", sessionID, err)
 		}
 	}
@@ -218,8 +219,8 @@ func (sm *SessionManager) cleanupExpiredSessions() {
 			}
 			log.Printf("[computer-use] closing session %s: %s", id, reason)
 
-			if session.BrowserMgr != nil {
-				if err := session.BrowserMgr.Close(); err != nil {
+			if session.Backend != nil {
+				if err := session.Backend.Close(); err != nil {
 					log.Printf("[computer-use] failed to close browser for session %s: %v", id, err)
 				}
 			}
@@ -235,8 +236,8 @@ func (sm *SessionManager) closeAllSessions() {
 
 	for id, session := range sm.sessions {
 		log.Printf("[computer-use] shutting down session %s", id)
-		if session.BrowserMgr != nil {
-			if err := session.BrowserMgr.Close(); err != nil {
+		if session.Backend != nil {
+			if err := session.Backend.Close(); err != nil {
 				log.Printf("[computer-use] failed to close browser for session %s: %v", id, err)
 			}
 		}

@@ -1,6 +1,10 @@
 package computeruse
 
 import (
+	"bytes"
+	"encoding/base64"
+	"image"
+	"image/png"
 	"testing"
 )
 
@@ -236,5 +240,103 @@ func TestEncodeScreenshot_SmallImage(t *testing.T) {
 	}
 	if encoded == "" {
 		t.Error("encodeScreenshot() = empty string; want non-empty base64")
+	}
+}
+
+// createLargePNG은 MaxScreenshotBytes를 초과하는 유효한 PNG 이미지를 생성한다.
+// 부드러운 그라데이션 패턴으로 JPEG 압축에도 효율적이면서 PNG 크기는 2MB를 초과한다.
+func createLargePNG(t *testing.T) []byte {
+	t.Helper()
+	// 3000x3000 NRGBA 이미지: 적당한 노이즈 + 그라데이션 혼합
+	width, height := 3000, 3000
+	img := image.NewNRGBA(image.Rect(0, 0, width, height))
+	// 의사난수 패턴을 적용하되 부분적으로 예측 가능하게
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			offset := (y*width + x) * 4
+			v := uint32(x*37+y*13) ^ uint32(x*y)
+			img.Pix[offset+0] = byte(v)
+			img.Pix[offset+1] = byte(v >> 8)
+			img.Pix[offset+2] = byte(v >> 16)
+			img.Pix[offset+3] = 255
+		}
+	}
+
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatalf("PNG 인코딩 실패: %v", err)
+	}
+
+	// 2MB 초과 확인, 미달 시 픽셀 데이터를 직접 추가하여 크기 보장
+	if buf.Len() <= MaxScreenshotBytes {
+		// 더 큰 이미지로 재시도
+		width, height = 6000, 6000
+		img = image.NewNRGBA(image.Rect(0, 0, width, height))
+		for i := range img.Pix {
+			img.Pix[i] = byte(i ^ (i >> 8) ^ (i >> 16))
+		}
+		buf.Reset()
+		if err := png.Encode(&buf, img); err != nil {
+			t.Fatalf("PNG 인코딩 실패: %v", err)
+		}
+	}
+
+	if buf.Len() <= MaxScreenshotBytes {
+		t.Skipf("생성된 PNG 크기 = %d 바이트; MaxScreenshotBytes 초과 불가 (환경 제한)", buf.Len())
+	}
+
+	return buf.Bytes()
+}
+
+func TestEncodeScreenshot_LargeImage_JPEG_Compression(t *testing.T) {
+	// MaxScreenshotBytes 초과하는 유효한 PNG 생성
+	largePNG := createLargePNG(t)
+
+	encoded, err := encodeScreenshot(largePNG)
+	if err != nil {
+		t.Fatalf("encodeScreenshot(large PNG) = error %v; want nil", err)
+	}
+	if encoded == "" {
+		t.Error("encodeScreenshot(large PNG) = empty string; want non-empty base64")
+	}
+
+	// base64 디코딩하여 JPEG 데이터가 유효한지 확인
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("base64 디코딩 실패: %v", err)
+	}
+	if len(decoded) == 0 {
+		t.Error("JPEG 결과가 비어있음")
+	}
+}
+
+func TestEncodeScreenshot_InvalidPNG_OverLimit(t *testing.T) {
+	// MaxScreenshotBytes 초과하지만 유효하지 않은 PNG 데이터
+	invalidLargeData := make([]byte, MaxScreenshotBytes+1)
+	for i := range invalidLargeData {
+		invalidLargeData[i] = byte(i % 256)
+	}
+
+	_, err := encodeScreenshot(invalidLargeData)
+	if err == nil {
+		t.Error("encodeScreenshot(invalid large data) = nil error; want PNG decode error")
+	}
+}
+
+func TestParseScrollParams_DirectionNotString(t *testing.T) {
+	// direction이 문자열이 아닌 경우
+	params := map[string]interface{}{"direction": 123}
+	_, _, err := parseScrollParams(params)
+	if err == nil {
+		t.Error("parseScrollParams(direction=int) = nil error; want error")
+	}
+}
+
+func TestParseScrollParams_InvalidAmount(t *testing.T) {
+	// amount가 숫자로 변환 불가능한 경우
+	params := map[string]interface{}{"direction": "down", "amount": "invalid"}
+	_, _, err := parseScrollParams(params)
+	if err == nil {
+		t.Error("parseScrollParams(amount=string) = nil error; want error")
 	}
 }

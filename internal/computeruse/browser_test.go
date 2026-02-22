@@ -6,6 +6,15 @@ import (
 	"testing"
 )
 
+// --- BrowserBackend 인터페이스 테스트 ---
+
+func TestBrowserManager_ImplementsBrowserBackend(t *testing.T) {
+	var backend BrowserBackend = NewBrowserManager(1280, 720, true)
+	if backend == nil {
+		t.Fatal("BrowserManager does not implement BrowserBackend")
+	}
+}
+
 // --- Constructor Tests ---
 
 func TestNewBrowserManager(t *testing.T) {
@@ -177,13 +186,9 @@ func TestBrowserManager_Launch_CancelledContext(t *testing.T) {
 }
 
 func TestBrowserManager_Launch_DoubleLaunch(t *testing.T) {
-	if testing.Short() {
-		t.Skip("Skipping browser launch test in short mode")
-	}
-
+	// active 플래그를 직접 설정하므로 Chrome 없이도 테스트 가능
 	bm := NewBrowserManager(1280, 720, true)
 
-	// Manually set active to simulate a launched browser without requiring Chrome.
 	bm.mu.Lock()
 	bm.active = true
 	bm.mu.Unlock()
@@ -195,6 +200,40 @@ func TestBrowserManager_Launch_DoubleLaunch(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "already launched") {
 		t.Errorf("Launch() error = %q; want containing 'already launched'", err.Error())
+	}
+}
+
+func TestBrowserManager_Close_WithCancelFuncs(t *testing.T) {
+	// active 상태에서 cancel 함수가 설정된 경우 Close가 정상 동작해야 한다
+	bm := NewBrowserManager(1280, 720, true)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	bm.mu.Lock()
+	bm.active = true
+	bm.allocCancel = cancel
+	bm.taskCancel = func() {} // no-op
+	bm.allocCtx = ctx
+	bm.mu.Unlock()
+
+	err := bm.Close()
+	if err != nil {
+		t.Errorf("Close() with cancel funcs = error %v; want nil", err)
+	}
+	if bm.IsActive() {
+		t.Error("IsActive() = true after Close; want false")
+	}
+}
+
+func TestBrowserManager_Scroll_UpDirection_BeforeLaunch(t *testing.T) {
+	bm := NewBrowserManager(1280, 720, true)
+	ctx := context.Background()
+
+	err := bm.Scroll(ctx, "up", 300)
+	if err == nil {
+		t.Error("Scroll(up) before Launch = nil; want error")
+	}
+	if !strings.Contains(err.Error(), "not active") {
+		t.Errorf("error = %q; want containing 'not active'", err.Error())
 	}
 }
 

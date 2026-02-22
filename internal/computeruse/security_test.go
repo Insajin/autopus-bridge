@@ -39,6 +39,8 @@ func TestSecurityValidator_ValidateURL(t *testing.T) {
 		// Invalid URLs.
 		{name: "empty URL", url: "", wantErr: true, errMsg: "empty"},
 		{name: "no scheme", url: "example.com", wantErr: true, errMsg: "no scheme"},
+		{name: "invalid port in URL", url: "http://localhost:abc/page", wantErr: true, errMsg: "failed to extract port"},
+		{name: "port out of range", url: "http://localhost:0/page", wantErr: true, errMsg: "failed to extract port"},
 	}
 
 	for _, tt := range tests {
@@ -71,6 +73,10 @@ func TestSecurityValidator_extractPort(t *testing.T) {
 		{name: "http default", host: "example.com", scheme: "http", wantPort: 80},
 		{name: "https default", host: "example.com", scheme: "https", wantPort: 443},
 		{name: "explicit port 443", host: "example.com:443", scheme: "https", wantPort: 443},
+		{name: "unknown scheme no port", host: "example.com", scheme: "ws", wantErr: true},
+		{name: "invalid port string", host: "example.com:abc", scheme: "http", wantErr: true},
+		{name: "port too low", host: "example.com:0", scheme: "http", wantErr: true},
+		{name: "port too high", host: "example.com:99999", scheme: "http", wantErr: true},
 	}
 
 	for _, tt := range tests {

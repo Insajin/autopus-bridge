@@ -15,14 +15,14 @@ const MaxScreenshotBytes = 2 * 1024 * 1024
 
 // ActionExecutor executes individual browser actions and captures screenshots.
 type ActionExecutor struct {
-	browser  *BrowserManager
+	backend  BrowserBackend
 	security *SecurityValidator
 }
 
 // NewActionExecutor creates a new ActionExecutor.
-func NewActionExecutor(browser *BrowserManager, security *SecurityValidator) *ActionExecutor {
+func NewActionExecutor(backend BrowserBackend, security *SecurityValidator) *ActionExecutor {
 	return &ActionExecutor{
-		browser:  browser,
+		backend:  backend,
 		security: security,
 	}
 }
@@ -31,8 +31,8 @@ func NewActionExecutor(browser *BrowserManager, security *SecurityValidator) *Ac
 // REQ-M2-01: Route computer_action messages to appropriate actions.
 // REQ-M2-02: Check browser instance state before actions.
 func (ae *ActionExecutor) Execute(ctx context.Context, action string, params map[string]interface{}) (screenshot string, err error) {
-	// Validate browser state before any action.
-	if !ae.browser.IsActive() {
+	// 액션 실행 전 브라우저 상태 검증
+	if !ae.backend.IsActive() {
 		return "", fmt.Errorf("browser is not active")
 	}
 
@@ -46,7 +46,7 @@ func (ae *ActionExecutor) Execute(ctx context.Context, action string, params map
 		if parseErr != nil {
 			return "", fmt.Errorf("invalid click params: %w", parseErr)
 		}
-		if err := ae.browser.Click(ctx, x, y); err != nil {
+		if err := ae.backend.Click(ctx, x, y); err != nil {
 			return "", err
 		}
 
@@ -55,7 +55,7 @@ func (ae *ActionExecutor) Execute(ctx context.Context, action string, params map
 		if parseErr != nil {
 			return "", fmt.Errorf("invalid type params: %w", parseErr)
 		}
-		if err := ae.browser.Type(ctx, text); err != nil {
+		if err := ae.backend.Type(ctx, text); err != nil {
 			return "", err
 		}
 
@@ -64,7 +64,7 @@ func (ae *ActionExecutor) Execute(ctx context.Context, action string, params map
 		if parseErr != nil {
 			return "", fmt.Errorf("invalid scroll params: %w", parseErr)
 		}
-		if err := ae.browser.Scroll(ctx, direction, amount); err != nil {
+		if err := ae.backend.Scroll(ctx, direction, amount); err != nil {
 			return "", err
 		}
 
@@ -77,7 +77,7 @@ func (ae *ActionExecutor) Execute(ctx context.Context, action string, params map
 		if err := ae.security.ValidateURL(url); err != nil {
 			return "", fmt.Errorf("URL blocked: %w", err)
 		}
-		if err := ae.browser.Navigate(ctx, url); err != nil {
+		if err := ae.backend.Navigate(ctx, url); err != nil {
 			return "", err
 		}
 
@@ -86,7 +86,7 @@ func (ae *ActionExecutor) Execute(ctx context.Context, action string, params map
 	}
 
 	// Capture screenshot after every action.
-	pngBytes, err := ae.browser.Screenshot(ctx)
+	pngBytes, err := ae.backend.Screenshot(ctx)
 	if err != nil {
 		return "", fmt.Errorf("failed to capture screenshot: %w", err)
 	}

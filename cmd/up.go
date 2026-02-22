@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	totalUpSteps = 9
+	totalUpSteps = 11
 )
 
 // upProgress tracks the completion state of each step for resume capability.
@@ -58,15 +58,17 @@ var upCmd = &cobra.Command{
 	Long: `login, setup, connect를 통합한 스마트 명령입니다.
 
 실행 단계:
-  [1/9] 인증 확인
-  [2/9] 토큰 갱신
-  [3/9] 워크스페이스 선택
-  [4/9] AI Provider 감지 및 설치
-  [5/9] 비즈니스 도구 감지
-  [6/9] 미설치 도구 설치
-  [7/9] AI 도구 MCP 설정
-  [8/9] 설정 파일 업데이트
-  [9/9] 서버 연결
+  [1/11] 인증 확인
+  [2/11] 토큰 갱신
+  [3/11] 워크스페이스 선택
+  [4/11] AI Provider 감지 및 설치
+  [5/11] 비즈니스 도구 감지
+  [6/11] Docker 감지 및 설정
+  [7/11] Chromium Sandbox 이미지 준비
+  [8/11] 미설치 도구 설치
+  [9/11] AI 도구 MCP 설정
+  [10/11] 설정 파일 업데이트
+  [11/11] 서버 연결
 
 각 단계가 실패하면 구체적인 해결 방법을 안내합니다.
 재실행 시 완료된 단계는 자동으로 건너뜁니다.`,
@@ -193,32 +195,44 @@ func runUp(cmd *cobra.Command, args []string) error {
 	markStepCompleted(progress, 5)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 6: Missing Tools Installation ──
-	printStep(6, totalUpSteps, "미설치 도구 확인 중...")
-	stepInstallMissingTools(bizTools, scanner)
+	// ── Step 6: Docker Detection ──
+	printStep(6, totalUpSteps, "Docker 감지 및 설정 중...")
+	stepDockerDetection()
 	markStepCompleted(progress, 6)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 7: AI Tool MCP Configuration ──
-	printStep(7, totalUpSteps, "AI 도구 MCP 설정 중...")
-	stepAIToolMCPConfig(providers, scanner)
+	// ── Step 7: Chromium Sandbox Image Preparation ──
+	printStep(7, totalUpSteps, "Chromium Sandbox 이미지 준비 중...")
+	stepChromiumSandboxImage()
 	markStepCompleted(progress, 7)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 8: Config Update ──
-	printStep(8, totalUpSteps, "설정 파일 업데이트 중...")
-	err = stepConfigUpdate(providers, creds)
-	if err != nil {
-		printError(fmt.Sprintf("설정 업데이트 실패: %v", err))
-		saveUpProgress(progress, 8, err.Error())
-		printFixSuggestion("config", err)
-		return err
-	}
+	// ── Step 8: Missing Tools Installation ──
+	printStep(8, totalUpSteps, "미설치 도구 확인 중...")
+	stepInstallMissingTools(bizTools, scanner)
 	markStepCompleted(progress, 8)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 9: Server Connection ──
-	printStep(9, totalUpSteps, "서버 연결 중...")
+	// ── Step 9: AI Tool MCP Configuration ──
+	printStep(9, totalUpSteps, "AI 도구 MCP 설정 중...")
+	stepAIToolMCPConfig(providers, scanner)
+	markStepCompleted(progress, 9)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 10: Config Update ──
+	printStep(10, totalUpSteps, "설정 파일 업데이트 중...")
+	err = stepConfigUpdate(providers, creds)
+	if err != nil {
+		printError(fmt.Sprintf("설정 업데이트 실패: %v", err))
+		saveUpProgress(progress, 10, err.Error())
+		printFixSuggestion("config", err)
+		return err
+	}
+	markStepCompleted(progress, 10)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 11: Server Connection ──
+	printStep(11, totalUpSteps, "서버 연결 중...")
 
 	// Clear progress file before connecting (connection is the final step)
 	clearUpProgress()
@@ -404,6 +418,122 @@ func stepConfigUpdate(providers []providerInfo, creds *auth.Credentials) error {
 
 	printSuccess(fmt.Sprintf("설정 파일 저장: %s", configPath))
 	return nil
+}
+
+// stepDockerDetection은 Docker 설치 여부를 확인하고 안내한다.
+// Docker가 없어도 up 명령은 실패하지 않는다 (NON-BLOCKING).
+// SPEC-COMPUTER-USE-002 Phase 2.
+func stepDockerDetection() {
+	isolation := viper.GetString("computer_use.isolation")
+	if isolation == "" {
+		isolation = "auto"
+	}
+
+	// Docker CLI 존재 여부 확인
+	dockerPath, err := exec.LookPath("docker")
+	if err != nil {
+		// Docker가 설치되어 있지 않음
+		if isolation == "container" {
+			printError("Docker가 설치되어 있지 않습니다 (isolation=container 모드에 필요)")
+			fmt.Println("  설치 방법:")
+			if runtime.GOOS == "darwin" {
+				fmt.Println("    brew install --cask docker")
+			} else {
+				fmt.Println("    curl -fsSL https://get.docker.com | sh")
+			}
+		} else {
+			// auto 모드: 경고만 출력하고 계속 진행
+			fmt.Println("  ! Docker가 설치되어 있지 않습니다 (컨테이너 격리 비활성화)")
+			fmt.Println("    컨테이너 격리를 사용하려면 Docker를 설치하세요:")
+			if runtime.GOOS == "darwin" {
+				fmt.Println("    brew install --cask docker")
+			} else {
+				fmt.Println("    curl -fsSL https://get.docker.com | sh")
+			}
+		}
+		return
+	}
+
+	// Docker 데몬 실행 여부 확인
+	infoCmd := exec.Command(dockerPath, "info")
+	output, err := infoCmd.CombinedOutput()
+	if err != nil {
+		if isolation == "container" {
+			printError("Docker 데몬이 실행되고 있지 않습니다 (isolation=container 모드에 필요)")
+			fmt.Println("  Docker Desktop을 시작하거나 'sudo systemctl start docker'를 실행하세요")
+		} else {
+			fmt.Println("  ! Docker가 설치되어 있지만 데몬이 실행되고 있지 않습니다")
+			fmt.Println("    컨테이너 격리를 사용하려면 Docker를 시작하세요")
+		}
+		return
+	}
+
+	// Docker 버전 정보 추출
+	versionCmd := exec.Command(dockerPath, "version", "--format", "{{.Server.Version}}")
+	versionOutput, versionErr := versionCmd.Output()
+	if versionErr == nil {
+		printSuccess(fmt.Sprintf("Docker %s 감지됨", strings.TrimSpace(string(versionOutput))))
+	} else {
+		// version 명령 실패 시 info 출력에서 추출 시도
+		_ = output // info 출력 사용 가능
+		printSuccess("Docker 감지됨")
+	}
+}
+
+// stepChromiumSandboxImage는 Chromium Sandbox Docker 이미지와 네트워크를 준비한다.
+// Docker가 없으면 건너뛴다 (NON-BLOCKING).
+// SPEC-COMPUTER-USE-002 Phase 2.
+func stepChromiumSandboxImage() {
+	// Docker CLI 존재 여부 확인
+	dockerPath, err := exec.LookPath("docker")
+	if err != nil {
+		printSkip("Docker 미설치 - 이미지 준비 건너뜀")
+		return
+	}
+
+	// Docker 데몬 실행 여부 확인
+	infoCmd := exec.Command(dockerPath, "info")
+	if err := infoCmd.Run(); err != nil {
+		printSkip("Docker 데몬 미실행 - 이미지 준비 건너뜀")
+		return
+	}
+
+	const imageName = "autopus/chromium-sandbox:latest"
+	const networkName = "autopus-sandbox-net"
+
+	// 이미지 존재 여부 확인
+	imgCmd := exec.Command(dockerPath, "images", "-q", imageName)
+	imgOutput, imgErr := imgCmd.Output()
+	if imgErr != nil || strings.TrimSpace(string(imgOutput)) == "" {
+		// 이미지가 없으면 풀 시도
+		fmt.Println("  이미지 가져오는 중:", imageName)
+		pullCmd := exec.Command(dockerPath, "pull", imageName)
+		pullCmd.Stdout = os.Stdout
+		pullCmd.Stderr = os.Stderr
+		if pullErr := pullCmd.Run(); pullErr != nil {
+			fmt.Println("  ! 이미지 풀 실패 (로컬 빌드가 필요할 수 있습니다)")
+			fmt.Printf("    docker build -t %s .\n", imageName)
+		} else {
+			printSuccess(fmt.Sprintf("이미지 준비 완료: %s", imageName))
+		}
+	} else {
+		printSuccess(fmt.Sprintf("이미지 확인됨: %s", imageName))
+	}
+
+	// 네트워크 존재 여부 확인
+	netCmd := exec.Command(dockerPath, "network", "ls", "--filter", fmt.Sprintf("name=%s", networkName), "-q")
+	netOutput, netErr := netCmd.Output()
+	if netErr != nil || strings.TrimSpace(string(netOutput)) == "" {
+		// 네트워크 생성
+		createCmd := exec.Command(dockerPath, "network", "create", networkName)
+		if createErr := createCmd.Run(); createErr != nil {
+			fmt.Printf("  ! 네트워크 %s 생성 실패: %v\n", networkName, createErr)
+		} else {
+			printSuccess(fmt.Sprintf("네트워크 생성됨: %s", networkName))
+		}
+	} else {
+		printSuccess(fmt.Sprintf("네트워크 확인됨: %s", networkName))
+	}
 }
 
 // printBusinessToolSummary 비즈니스 도구 감지 결과를 요약 출력합니다.

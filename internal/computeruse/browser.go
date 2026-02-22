@@ -9,6 +9,22 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// BrowserBackend은 브라우저 자동화를 추상화하여
+// 로컬 chromedp와 컨테이너 기반 Chromium을 모두 지원한다.
+type BrowserBackend interface {
+	Launch(ctx context.Context) error
+	Close() error
+	IsActive() bool
+	Screenshot(ctx context.Context) ([]byte, error)
+	Navigate(ctx context.Context, url string) error
+	Click(ctx context.Context, x, y float64) error
+	Type(ctx context.Context, text string) error
+	Scroll(ctx context.Context, direction string, amount int) error
+}
+
+// 컴파일 타임 인터페이스 구현 확인
+var _ BrowserBackend = (*BrowserManager)(nil)
+
 // BrowserManager manages a single Chrome DevTools Protocol browser instance
 // for interactive computer use sessions.
 type BrowserManager struct {
