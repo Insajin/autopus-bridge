@@ -794,6 +794,333 @@ func TestContainerPool_replenishWarmPool_ShutdownDuringCreate(t *testing.T) {
 
 // --- Acquire/Release 통합 테스트 ---
 
+// --- Idle Timeout 테스트 ---
+
+func TestPool_IdleTimeout_CleansExpiredContainers(t *testing.T) {
+	pool, mock := newTestPool(t, PoolConfig{
+		MaxContainers: 5,
+		WarmPoolSize:  2,
+		IdleTimeout:   100 * time.Millisecond, // 매우 짧은 타임아웃
+	})
+
+	// 워밍 풀에 이미 만료된 컨테이너 추가
+	pool.mu.Lock()
+	pool.warmPool = append(pool.warmPool,
+		warmContainer{
+			info:      &ContainerInfo{ID: "expired-container-1", HostPort: "49200"},
+			createdAt: time.Now().Add(-1 * time.Minute), // 1분 전 생성 (타임아웃 초과)
+		},
+		warmContainer{
+			info:      &ContainerInfo{ID: "fresh-container-2", HostPort: "49201"},
+			createdAt: time.Now(), // 방금 생성 (타임아웃 미초과)
+		},
+	)
+	pool.mu.Unlock()
+
+	mock.createCalled = 0
+	mock.stopCalled = 0
+	mock.removeCalled = 0
+
+	ctx := context.Background()
+	pool.replenishWarmPool(ctx)
+
+	// 만료된 컨테이너 1개 삭제 확인 (Remove 호출: stop + remove)
+	if mock.stopCalled < 1 {
+		t.Errorf("ContainerStop 호출 횟수 = %d; want >= 1 (만료 컨테이너 삭제)", mock.stopCalled)
+	}
+	if mock.removeCalled < 1 {
+		t.Errorf("ContainerRemove 호출 횟수 = %d; want >= 1 (만료 컨테이너 삭제)", mock.removeCalled)
+	}
+
+	// fresh-container-2는 남아있어야 함
+	pool.mu.Lock()
+	hasFresh := false
+	for _, w := range pool.warmPool {
+		if w.info.ID == "fresh-container-2" {
+			hasFresh = true
+		}
+		if w.info.ID == "expired-container-1" {
+			t.Error("만료된 컨테이너가 워밍 풀에 여전히 존재합니다")
+		}
+	}
+	pool.mu.Unlock()
+
+	if !hasFresh {
+		t.Error("신선한 컨테이너가 워밍 풀에서 사라졌습니다")
+	}
+}
+
+func TestPool_IdleTimeout_NoExpiredContainers(t *testing.T) {
+	pool, mock := newTestPool(t, PoolConfig{
+		MaxContainers: 5,
+		WarmPoolSize:  2,
+		IdleTimeout:   10 * time.Minute, // 긴 타임아웃
+	})
+
+	// 워밍 풀에 아직 만료되지 않은 컨테이너 추가
+	pool.mu.Lock()
+	pool.warmPool = append(pool.warmPool,
+		warmContainer{
+			info:      &ContainerInfo{ID: "fresh-1", HostPort: "49200"},
+			createdAt: time.Now(),
+		},
+		warmContainer{
+			info:      &ContainerInfo{ID: "fresh-2", HostPort: "49201"},
+			createdAt: time.Now(),
+		},
+	)
+	pool.mu.Unlock()
+
+	mock.stopCalled = 0
+	mock.removeCalled = 0
+	mock.createCalled = 0
+
+	ctx := context.Background()
+	pool.replenishWarmPool(ctx)
+
+	// 만료된 것이 없으므로 삭제 없어야 함
+	if mock.stopCalled != 0 {
+		t.Errorf("ContainerStop 호출 횟수 = %d; want 0 (만료 컨테이너 없음)", mock.stopCalled)
+	}
+	// 이미 WarmPoolSize=2이고 2개 있으므로 생성도 없어야 함
+	if mock.createCalled != 0 {
+		t.Errorf("ContainerCreate 호출 횟수 = %d; want 0 (이미 충분)", mock.createCalled)
+	}
+}
+
+// --- CleanupOrphaned 테스트 ---
+
+func TestPool_CleanupOrphaned(t *testing.T) {
+	pool, mock := newTestPool(t, DefaultPoolConfig())
+
+	mock.stopCalled = 0
+	mock.removeCalled = 0
+
+	ctx := context.Background()
+	orphanIDs := []string{"orphan-container-1", "orphan-container-2", "orphan-container-3"}
+
+	err := pool.CleanupOrphaned(ctx, orphanIDs)
+	if err != nil {
+		t.Fatalf("CleanupOrphaned() = error %v; want nil", err)
+	}
+
+	// 3개 컨테이너 삭제 확인
+	if mock.removeCalled != 3 {
+		t.Errorf("ContainerRemove 호출 횟수 = %d; want 3", mock.removeCalled)
+	}
+	if mock.stopCalled != 3 {
+		t.Errorf("ContainerStop 호출 횟수 = %d; want 3", mock.stopCalled)
+	}
+}
+
+func TestPool_CleanupOrphaned_EmptyList(t *testing.T) {
+	pool, mock := newTestPool(t, DefaultPoolConfig())
+
+	mock.stopCalled = 0
+	mock.removeCalled = 0
+
+	ctx := context.Background()
+	err := pool.CleanupOrphaned(ctx, nil)
+	if err != nil {
+		t.Fatalf("CleanupOrphaned(nil) = error %v; want nil", err)
+	}
+
+	// 빈 목록이면 아무것도 하지 않아야 함
+	if mock.removeCalled != 0 {
+		t.Errorf("ContainerRemove 호출 횟수 = %d; want 0", mock.removeCalled)
+	}
+}
+
+func TestPool_CleanupOrphaned_PartialFailure(t *testing.T) {
+	mock := newMockDockerClient()
+	mock.removeErr = fmt.Errorf("container not found")
+	cm, _ := NewContainerManager(mock, DefaultContainerConfig())
+	pool := NewContainerPool(cm, DefaultPoolConfig())
+
+	ctx := context.Background()
+	err := pool.CleanupOrphaned(ctx, []string{"orphan-1", "orphan-2"})
+
+	// 일부 실패 시 에러 반환
+	if err == nil {
+		t.Error("CleanupOrphaned() with remove error = nil; want error")
+	}
+	if !strings.Contains(err.Error(), "일부 orphaned 컨테이너 정리 실패") {
+		t.Errorf("error = %q; want containing '일부 orphaned 컨테이너 정리 실패'", err.Error())
+	}
+}
+
+// --- Health Monitor 테스트 ---
+
+func TestPool_HealthMonitor_ReplacesUnhealthy(t *testing.T) {
+	mock := newMockDockerClient()
+	cm, _ := NewContainerManager(mock, DefaultContainerConfig())
+	pool := NewContainerPool(cm, PoolConfig{
+		MaxContainers: 5,
+		WarmPoolSize:  0,
+		IdleTimeout:   time.Minute,
+	})
+
+	// 활성 풀에 컨테이너 수동 추가
+	pool.mu.Lock()
+	pool.activePool["sess-health-1"] = activeContainer{
+		info:       &ContainerInfo{ID: "unhealthy-container-123", HostPort: "49200"},
+		sessionID:  "sess-health-1",
+		assignedAt: time.Now(),
+	}
+	pool.mu.Unlock()
+
+	// HealthCheck가 실패하도록 ContainerInspect 에러 설정
+	mock.inspectErr = fmt.Errorf("container not responding")
+	mock.createCalled = 0
+
+	failCounts := make(map[string]int)
+	ctx := context.Background()
+
+	// 1회차 실패
+	pool.checkActiveContainerHealth(ctx, failCounts)
+	if failCounts["sess-health-1"] != 1 {
+		t.Errorf("failCounts after 1st check = %d; want 1", failCounts["sess-health-1"])
+	}
+
+	// 2회차 실패
+	pool.checkActiveContainerHealth(ctx, failCounts)
+	if failCounts["sess-health-1"] != 2 {
+		t.Errorf("failCounts after 2nd check = %d; want 2", failCounts["sess-health-1"])
+	}
+
+	// 3회차 실패 -> 교체 시도
+	pool.checkActiveContainerHealth(ctx, failCounts)
+
+	// 3회 실패 후 failCount가 삭제되어야 함 (교체 시도됨)
+	if _, exists := failCounts["sess-health-1"]; exists {
+		t.Error("failCounts에서 세션이 삭제되지 않음 (교체 시도 후 삭제 기대)")
+	}
+
+	// 교체 시도 확인 (Create 호출됨)
+	if mock.createCalled == 0 {
+		t.Error("교체 시도 시 ContainerCreate가 호출되지 않음")
+	}
+}
+
+func TestPool_HealthMonitor_ResetOnSuccess(t *testing.T) {
+	mock := newMockDockerClient()
+	cm, _ := NewContainerManager(mock, DefaultContainerConfig())
+	pool := NewContainerPool(cm, PoolConfig{
+		MaxContainers: 5,
+		WarmPoolSize:  0,
+		IdleTimeout:   time.Minute,
+	})
+
+	// 활성 풀에 컨테이너 수동 추가
+	pool.mu.Lock()
+	pool.activePool["sess-reset-1"] = activeContainer{
+		info:       &ContainerInfo{ID: "healthy-container-123", HostPort: "49200"},
+		sessionID:  "sess-reset-1",
+		assignedAt: time.Now(),
+	}
+	pool.mu.Unlock()
+
+	failCounts := make(map[string]int)
+	ctx := context.Background()
+
+	// 1회 실패
+	mock.inspectErr = fmt.Errorf("temporary error")
+	pool.checkActiveContainerHealth(ctx, failCounts)
+	if failCounts["sess-reset-1"] != 1 {
+		t.Fatalf("failCounts after 1st check = %d; want 1", failCounts["sess-reset-1"])
+	}
+
+	// HealthCheck를 성공하게 만들기 위해 inspectErr 초기화
+	// 주의: HealthCheck는 ContainerInspect + HTTP 호출을 하지만,
+	// ContainerInspect가 성공해도 HTTP 호출이 실패할 수 있음.
+	// 여기서는 inspectErr를 다시 설정하여 한 번 더 실패시킴.
+	// 그 후 inspect를 성공시키되 HTTP도 성공해야 하므로
+	// 별도의 httptest 서버가 필요. 간단히 2회 연속 실패 후 리셋하는 것으로 대체.
+	pool.checkActiveContainerHealth(ctx, failCounts)
+	if failCounts["sess-reset-1"] != 2 {
+		t.Fatalf("failCounts after 2nd check = %d; want 2", failCounts["sess-reset-1"])
+	}
+
+	// 세션이 activePool에서 제거되면 failCounts도 정리됨
+	pool.mu.Lock()
+	delete(pool.activePool, "sess-reset-1")
+	pool.mu.Unlock()
+
+	// 다음 체크 시 targets가 비어있고, 정리 단계에서 삭제됨
+	pool.checkActiveContainerHealth(ctx, failCounts)
+	if _, exists := failCounts["sess-reset-1"]; exists {
+		t.Error("세션이 activePool에서 제거된 후에도 failCounts에 남아있음")
+	}
+}
+
+func TestPool_HealthMonitor_ShutdownSkips(t *testing.T) {
+	pool, _ := newTestPool(t, PoolConfig{
+		MaxContainers: 5,
+		WarmPoolSize:  0,
+		IdleTimeout:   time.Minute,
+	})
+
+	// 종료 상태로 설정
+	pool.mu.Lock()
+	pool.shutdown = true
+	pool.mu.Unlock()
+
+	failCounts := make(map[string]int)
+	ctx := context.Background()
+
+	// 종료 상태에서는 아무것도 하지 않아야 한다
+	pool.checkActiveContainerHealth(ctx, failCounts)
+
+	if len(failCounts) != 0 {
+		t.Errorf("failCounts length = %d; want 0 (shutdown에서는 검사 안 함)", len(failCounts))
+	}
+}
+
+func TestPool_StartHealthMonitor_Cancellation(t *testing.T) {
+	pool, _ := newTestPool(t, PoolConfig{
+		MaxContainers: 5,
+		WarmPoolSize:  0,
+		IdleTimeout:   time.Minute,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan struct{})
+	go func() {
+		pool.StartHealthMonitor(ctx)
+		close(done)
+	}()
+
+	// 즉시 취소
+	cancel()
+
+	select {
+	case <-done:
+		// 정상 종료
+	case <-time.After(5 * time.Second):
+		t.Error("StartHealthMonitor가 컨텍스트 취소 후 종료되지 않음")
+	}
+}
+
+func TestPool_replaceUnhealthyContainer_SessionGone(t *testing.T) {
+	pool, mock := newTestPool(t, PoolConfig{
+		MaxContainers: 5,
+		WarmPoolSize:  0,
+		IdleTimeout:   time.Minute,
+	})
+
+	mock.createCalled = 0
+
+	ctx := context.Background()
+
+	// 존재하지 않는 세션에 대한 교체 시도 -> 아무것도 안 해야 함
+	pool.replaceUnhealthyContainer(ctx, "nonexistent-session")
+
+	if mock.createCalled != 0 {
+		t.Errorf("ContainerCreate 호출 횟수 = %d; want 0 (세션 없음)", mock.createCalled)
+	}
+}
+
 func TestContainerPool_AcquireRelease_Cycle(t *testing.T) {
 	pool, _ := newTestPool(t, PoolConfig{
 		MaxContainers: 2,

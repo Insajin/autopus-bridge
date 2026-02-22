@@ -20,6 +20,28 @@ type Config struct {
 	Logging      LoggingConfig      `mapstructure:"logging"`
 	Reconnection ReconnectionConfig `mapstructure:"reconnection"`
 	Security     SecurityConfig     `mapstructure:"security"`
+	ComputerUse  ComputerUseConfig  `mapstructure:"computer_use"`
+}
+
+// ComputerUseConfig는 Computer Use 컨테이너 격리 설정입니다.
+// SPEC-COMPUTER-USE-002: REQ-C6-01
+type ComputerUseConfig struct {
+	// Isolation은 격리 모드입니다 ("container", "local", "auto").
+	Isolation string `mapstructure:"isolation"`
+	// MaxContainers는 최대 동시 컨테이너 수입니다.
+	MaxContainers int `mapstructure:"max_containers"`
+	// WarmPoolSize는 warm 풀 크기입니다.
+	WarmPoolSize int `mapstructure:"warm_pool_size"`
+	// Image는 Docker 이미지 이름입니다.
+	Image string `mapstructure:"image"`
+	// ContainerMemory는 컨테이너 메모리 제한입니다 (예: "512m").
+	ContainerMemory string `mapstructure:"container_memory"`
+	// ContainerCPU는 컨테이너 CPU 제한입니다 (예: "1.0").
+	ContainerCPU string `mapstructure:"container_cpu"`
+	// IdleTimeout은 warm 컨테이너 유휴 타임아웃입니다 (예: "5m").
+	IdleTimeout string `mapstructure:"idle_timeout"`
+	// Network는 Docker 네트워크 이름입니다.
+	Network string `mapstructure:"network"`
 }
 
 // SecurityConfig는 보안 관련 설정입니다.
@@ -321,6 +343,21 @@ func (c *Config) GetClaudeProviderInfo() map[string]interface{} {
 		"api_available": c.Providers.Claude.HasAPIKey(),
 		"available":     c.Providers.Claude.IsAvailable(),
 	}
+}
+
+// GetIsolationMode는 격리 모드를 반환합니다.
+// 설정되지 않은 경우 기본값 "auto"를 반환합니다.
+func (c *ComputerUseConfig) GetIsolationMode() string {
+	if c.Isolation == "" {
+		return "auto"
+	}
+	return c.Isolation
+}
+
+// IsContainerMode는 컨테이너 모드 여부를 확인합니다.
+func (c *ComputerUseConfig) IsContainerMode() bool {
+	mode := c.GetIsolationMode()
+	return mode == "container" || mode == "auto"
 }
 
 // expandPath는 ~를 홈 디렉토리로 확장합니다.

@@ -135,6 +135,16 @@ func setDefaults() {
 	viper.SetDefault("security.sandbox.allowed_paths", []string{"~/projects", "~/workspace"})
 	viper.SetDefault("security.sandbox.denied_paths", []string{"~/.ssh", "~/.gnupg", "~/.config", "~/.aws", "/etc", "/var"})
 	viper.SetDefault("security.sandbox.deny_hidden_dirs", true)
+
+	// Computer Use 기본값 (SPEC-COMPUTER-USE-002)
+	viper.SetDefault("computer_use.isolation", "auto")
+	viper.SetDefault("computer_use.max_containers", 5)
+	viper.SetDefault("computer_use.warm_pool_size", 2)
+	viper.SetDefault("computer_use.image", "autopus/chromium-sandbox:latest")
+	viper.SetDefault("computer_use.container_memory", "512m")
+	viper.SetDefault("computer_use.container_cpu", "1.0")
+	viper.SetDefault("computer_use.idle_timeout", "5m")
+	viper.SetDefault("computer_use.network", "autopus-sandbox-net")
 }
 
 // initLogger는 로거를 초기화합니다.

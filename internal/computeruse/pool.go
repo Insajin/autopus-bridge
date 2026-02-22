@@ -194,13 +194,26 @@ func (p *ContainerPool) StartReplenisher(ctx context.Context) {
 	}
 }
 
-// replenishWarmPool은 워밍 풀이 설정 크기보다 작으면 컨테이너를 추가한다.
+// replenishWarmPool은 유휴 워밍 컨테이너를 정리하고, 풀이 설정 크기보다 작으면 컨테이너를 추가한다.
 func (p *ContainerPool) replenishWarmPool(ctx context.Context) {
 	p.mu.Lock()
 	if p.shutdown {
 		p.mu.Unlock()
 		return
 	}
+
+	// 유휴 워밍 컨테이너 정리 (REQ-C2-04)
+	now := time.Now()
+	var expiredContainers []string
+	var remainingWarm []warmContainer
+	for _, w := range p.warmPool {
+		if now.Sub(w.createdAt) > p.config.IdleTimeout {
+			expiredContainers = append(expiredContainers, w.info.ID)
+		} else {
+			remainingWarm = append(remainingWarm, w)
+		}
+	}
+	p.warmPool = remainingWarm
 
 	warmNeeded := p.config.WarmPoolSize - len(p.warmPool)
 	totalCount := len(p.warmPool) + len(p.activePool)
@@ -212,6 +225,15 @@ func (p *ContainerPool) replenishWarmPool(ctx context.Context) {
 		toCreate = availableSlots
 	}
 	p.mu.Unlock()
+
+	// 만료된 유휴 컨테이너 삭제 (잠금 해제 후 실행 - I/O 작업)
+	for _, id := range expiredContainers {
+		if err := p.manager.Remove(ctx, id); err != nil {
+			log.Printf("[computer-use] 유휴 워밍 컨테이너 삭제 실패: container=%s, err=%v", id[:min(12, len(id))], err)
+		} else {
+			log.Printf("[computer-use] 유휴 워밍 컨테이너 삭제: container=%s", id[:min(12, len(id))])
+		}
+	}
 
 	for i := 0; i < toCreate; i++ {
 		if ctx.Err() != nil {
@@ -278,6 +300,31 @@ func (p *ContainerPool) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// CleanupOrphaned는 시작 시 이전 실행에서 남은 orphaned 컨테이너를 정리한다.
+// containerIDs는 정리할 컨테이너 ID 목록이다.
+func (p *ContainerPool) CleanupOrphaned(ctx context.Context, containerIDs []string) error {
+	if len(containerIDs) == 0 {
+		return nil
+	}
+
+	log.Printf("[computer-use] orphaned 컨테이너 정리 시작: %d개", len(containerIDs))
+
+	var errs []error
+	for _, id := range containerIDs {
+		if err := p.manager.Remove(ctx, id); err != nil {
+			errs = append(errs, fmt.Errorf("orphaned 컨테이너 %s 삭제 실패: %w", id[:min(12, len(id))], err))
+			log.Printf("[computer-use] orphaned 컨테이너 삭제 실패: container=%s, err=%v", id[:min(12, len(id))], err)
+		} else {
+			log.Printf("[computer-use] orphaned 컨테이너 삭제 완료: container=%s", id[:min(12, len(id))])
+		}
+	}
+
+	if len(errs) > 0 {
+		return fmt.Errorf("일부 orphaned 컨테이너 정리 실패: %v", errs)
+	}
+	return nil
+}
+
 // Status는 풀의 현재 상태를 반환한다.
 func (p *ContainerPool) Status() PoolStatus {
 	p.mu.Lock()
@@ -302,4 +349,115 @@ func (p *ContainerPool) WarmCount() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.warmPool)
+}
+
+// StartHealthMonitor는 활성 컨테이너의 health check를 주기적으로 수행하는 고루틴을 시작한다.
+// 3회 연속 실패 시 컨테이너를 교체한다 (REQ-C1-07).
+func (p *ContainerPool) StartHealthMonitor(ctx context.Context) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	// sessionID -> 연속 실패 횟수
+	failCounts := make(map[string]int)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.checkActiveContainerHealth(ctx, failCounts)
+		}
+	}
+}
+
+// checkActiveContainerHealth는 활성 컨테이너의 health를 확인하고 실패 시 교체한다.
+func (p *ContainerPool) checkActiveContainerHealth(ctx context.Context, failCounts map[string]int) {
+	p.mu.Lock()
+	if p.shutdown {
+		p.mu.Unlock()
+		return
+	}
+
+	// 활성 컨테이너 목록 복사 (잠금 밖에서 health check 수행)
+	type checkTarget struct {
+		sessionID   string
+		containerID string
+		hostPort    string
+	}
+	var targets []checkTarget
+	for sid, active := range p.activePool {
+		targets = append(targets, checkTarget{
+			sessionID:   sid,
+			containerID: active.info.ID,
+			hostPort:    active.info.HostPort,
+		})
+	}
+	p.mu.Unlock()
+
+	for _, target := range targets {
+		err := p.manager.HealthCheck(ctx, target.containerID)
+		if err != nil {
+			failCounts[target.sessionID]++
+			log.Printf("[computer-use] health check 실패 (%d/3): session=%s, container=%s, err=%v",
+				failCounts[target.sessionID], target.sessionID, target.containerID[:min(12, len(target.containerID))], err)
+
+			if failCounts[target.sessionID] >= 3 {
+				log.Printf("[computer-use] 3회 연속 health check 실패, 컨테이너 교체: session=%s", target.sessionID)
+				p.replaceUnhealthyContainer(ctx, target.sessionID)
+				delete(failCounts, target.sessionID)
+			}
+		} else {
+			// 성공 시 카운터 리셋
+			delete(failCounts, target.sessionID)
+		}
+	}
+
+	// 더 이상 활성이 아닌 세션의 카운터 정리
+	p.mu.Lock()
+	for sid := range failCounts {
+		if _, exists := p.activePool[sid]; !exists {
+			delete(failCounts, sid)
+		}
+	}
+	p.mu.Unlock()
+}
+
+// replaceUnhealthyContainer는 비정상 컨테이너를 새 컨테이너로 교체한다.
+func (p *ContainerPool) replaceUnhealthyContainer(ctx context.Context, sessionID string) {
+	p.mu.Lock()
+	active, exists := p.activePool[sessionID]
+	if !exists {
+		p.mu.Unlock()
+		return
+	}
+	oldContainerID := active.info.ID
+	p.mu.Unlock()
+
+	// 새 컨테이너 생성
+	newInfo, err := p.manager.Create(ctx)
+	if err != nil {
+		log.Printf("[computer-use] 교체 컨테이너 생성 실패: session=%s, err=%v", sessionID, err)
+		return
+	}
+
+	p.mu.Lock()
+	// 다시 확인 (락 해제 사이에 세션이 종료되었을 수 있음)
+	if _, stillExists := p.activePool[sessionID]; !stillExists {
+		p.mu.Unlock()
+		_ = p.manager.Remove(ctx, newInfo.ID)
+		return
+	}
+
+	p.activePool[sessionID] = activeContainer{
+		info:       newInfo,
+		sessionID:  sessionID,
+		assignedAt: time.Now(),
+	}
+	p.mu.Unlock()
+
+	// 이전 컨테이너 정리
+	_ = p.manager.Remove(ctx, oldContainerID)
+
+	log.Printf("[computer-use] 컨테이너 교체 완료: session=%s, old=%s, new=%s",
+		sessionID, oldContainerID[:min(12, len(oldContainerID))], newInfo.ID[:min(12, len(newInfo.ID))])
 }
