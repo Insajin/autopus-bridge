@@ -12,7 +12,7 @@ import (
 
 const (
 	// githubRepo는 GitHub 저장소 경로입니다.
-	githubRepo = "autopus/autopus-bridge"
+	githubRepo = "Insajin/autopus-bridge"
 )
 
 // updateCmd는 최신 버전으로 업데이트하는 명령어입니다.
