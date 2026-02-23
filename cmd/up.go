@@ -700,13 +700,44 @@ func stepInstallMissingAICLI(providers []providerInfo, scanner *bufio.Scanner) [
 
 	// npm 사용 가능 여부 확인
 	if _, err := exec.LookPath("npm"); err != nil {
-		fmt.Println("  ! npm이 설치되어 있지 않습니다. AI CLI 설치에 Node.js가 필요합니다.")
+		// macOS에서 Homebrew를 통한 자동 설치 시도
 		if runtime.GOOS == "darwin" {
-			fmt.Println("    brew install node 로 Node.js를 먼저 설치하세요.")
+			// Homebrew 사용 가능 여부 확인
+			if _, brewErr := exec.LookPath("brew"); brewErr == nil {
+				fmt.Println("  ! npm이 설치되어 있지 않습니다. Homebrew로 Node.js를 설치합니다.")
+				fmt.Printf("    Node.js를 설치하시겠습니까? (Y/n): ")
+
+				if scanYesNoDefault(scanner, true) {
+					installCmd := "brew install node"
+					fmt.Printf("  설치 중: %s\n", installCmd)
+					if runErr := runInstallCommand(installCmd); runErr != nil {
+						printError(fmt.Sprintf("Node.js 설치 실패: %v", runErr))
+						return providers
+					}
+
+					// npm 재확인
+					if _, npmCheckErr := exec.LookPath("npm"); npmCheckErr != nil {
+						printError("Node.js 설치 후에도 npm을 찾을 수 없습니다")
+						return providers
+					}
+					printSuccess("Node.js 설치 완료")
+				} else {
+					printSkip("Node.js 설치 건너뜀")
+					return providers
+				}
+			} else {
+				// Homebrew가 없는 경우
+				fmt.Println("  ! npm이 설치되어 있지 않습니다. AI CLI 설치에 Node.js가 필요합니다.")
+				fmt.Println("    Homebrew를 설치한 후 brew install node 로 Node.js를 설치하세요.")
+				fmt.Println("    Homebrew 설치: https://brew.sh")
+				return providers
+			}
 		} else {
+			// 비 macOS 시스템
+			fmt.Println("  ! npm이 설치되어 있지 않습니다. AI CLI 설치에 Node.js가 필요합니다.")
 			fmt.Println("    https://nodejs.org 에서 Node.js를 먼저 설치하세요.")
+			return providers
 		}
-		return providers
 	}
 
 	// 미설치 목록 표시 및 설치 여부 확인
