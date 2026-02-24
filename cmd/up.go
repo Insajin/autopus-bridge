@@ -197,7 +197,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	// ── Step 6: Docker Detection ──
 	printStep(6, totalUpSteps, "Docker 감지 및 설정 중...")
-	stepDockerDetection()
+	stepDockerDetection(scanner)
 	markStepCompleted(progress, 6)
 	saveUpProgress(progress, 0, "")
 
@@ -444,10 +444,10 @@ func stepConfigUpdate(providers []providerInfo, creds *auth.Credentials) error {
 	return nil
 }
 
-// stepDockerDetection은 Docker 설치 여부를 확인하고 안내한다.
+// stepDockerDetection은 Docker 설치 여부를 확인하고, 미설치 시 자동 설치를 제안한다.
 // Docker가 없어도 up 명령은 실패하지 않는다 (NON-BLOCKING).
 // SPEC-COMPUTER-USE-002 Phase 2.
-func stepDockerDetection() {
+func stepDockerDetection(scanner *bufio.Scanner) {
 	isolation := viper.GetString("computer_use.isolation")
 	if isolation == "" {
 		isolation = "auto"
@@ -456,23 +456,60 @@ func stepDockerDetection() {
 	// Docker CLI 존재 여부 확인
 	dockerPath, err := exec.LookPath("docker")
 	if err != nil {
-		// Docker가 설치되어 있지 않음
-		if isolation == "container" {
-			printError("Docker가 설치되어 있지 않습니다 (isolation=container 모드에 필요)")
-			fmt.Println("  설치 방법:")
-			if runtime.GOOS == "darwin" {
-				fmt.Println("    brew install --cask docker")
-			} else {
-				fmt.Println("    curl -fsSL https://get.docker.com | sh")
+		// Docker가 설치되어 있지 않음 - 자동 설치 제안
+		fmt.Println("  Docker가 설치되어 있지 않습니다.")
+		fmt.Printf("  Docker를 설치하시겠습니까? (Y/n): ")
+
+		if scanYesNoDefault(scanner, true) {
+			installed := false
+			switch runtime.GOOS {
+			case "darwin":
+				// macOS: Homebrew를 통한 설치
+				if _, brewErr := exec.LookPath("brew"); brewErr == nil {
+					installCmd := "brew install --cask docker"
+					fmt.Printf("  설치 중: %s\n", installCmd)
+					if runErr := runInstallCommand(installCmd); runErr != nil {
+						printError(fmt.Sprintf("Docker 설치 실패: %v", runErr))
+					} else {
+						installed = true
+						printSuccess("Docker Desktop 설치 완료")
+					}
+				} else {
+					fmt.Println("  ! Homebrew가 설치되어 있지 않아 자동 설치가 불가합니다.")
+					fmt.Println("    수동 설치: https://docs.docker.com/desktop/install/mac-install/")
+				}
+			case "linux":
+				installCmd := "curl -fsSL https://get.docker.com | sh"
+				fmt.Printf("  설치 중: %s\n", installCmd)
+				if runErr := runInstallCommand(installCmd); runErr != nil {
+					printError(fmt.Sprintf("Docker 설치 실패: %v", runErr))
+				} else {
+					installed = true
+					printSuccess("Docker 설치 완료")
+					// docker 그룹에 사용자 추가 안내
+					fmt.Println("  docker 그룹에 사용자를 추가하려면:")
+					fmt.Println("    sudo usermod -aG docker $USER")
+					fmt.Println("    (적용하려면 로그아웃 후 다시 로그인하세요)")
+				}
+			default:
+				// Windows 등 기타 OS
+				fmt.Println("  ! 이 OS에서는 자동 설치를 지원하지 않습니다.")
+				fmt.Println("    수동 설치: https://docs.docker.com/desktop/install/windows-install/")
+			}
+
+			if installed {
+				// 설치 후 Docker 데몬 시작 시도
+				dockerPath, _ = exec.LookPath("docker")
+				if dockerPath != "" {
+					startDockerDaemon(dockerPath)
+				}
+				return
 			}
 		} else {
-			// auto 모드: 경고만 출력하고 계속 진행
-			fmt.Println("  ! Docker가 설치되어 있지 않습니다 (컨테이너 격리 비활성화)")
-			fmt.Println("    컨테이너 격리를 사용하려면 Docker를 설치하세요:")
-			if runtime.GOOS == "darwin" {
-				fmt.Println("    brew install --cask docker")
+			if isolation == "container" {
+				printError("Docker가 필요합니다 (isolation=container 모드)")
 			} else {
-				fmt.Println("    curl -fsSL https://get.docker.com | sh")
+				printSkip("Docker 설치 건너뜀 (컨테이너 격리 비활성화)")
 			}
 		}
 		return
@@ -482,24 +519,68 @@ func stepDockerDetection() {
 	infoCmd := exec.Command(dockerPath, "info")
 	output, err := infoCmd.CombinedOutput()
 	if err != nil {
-		if isolation == "container" {
-			printError("Docker 데몬이 실행되고 있지 않습니다 (isolation=container 모드에 필요)")
-			fmt.Println("  Docker Desktop을 시작하거나 'sudo systemctl start docker'를 실행하세요")
+		// Docker 설치됨, 데몬 미실행 - 시작 제안
+		fmt.Println("  Docker가 설치되어 있지만 데몬이 실행되고 있지 않습니다.")
+		startDockerDaemon(dockerPath)
+
+		// 데몬 시작 후 재확인
+		recheckCmd := exec.Command(dockerPath, "info")
+		if recheckErr := recheckCmd.Run(); recheckErr != nil {
+			if isolation == "container" {
+				printError("Docker 데몬을 시작할 수 없습니다 (isolation=container 모드에 필요)")
+			} else {
+				fmt.Println("  ! Docker 데몬이 아직 실행되지 않았습니다 (컨테이너 격리 비활성화)")
+			}
 		} else {
-			fmt.Println("  ! Docker가 설치되어 있지만 데몬이 실행되고 있지 않습니다")
-			fmt.Println("    컨테이너 격리를 사용하려면 Docker를 시작하세요")
+			printDockerVersion(dockerPath)
 		}
 		return
 	}
 
 	// Docker 버전 정보 추출
+	_ = output
+	printDockerVersion(dockerPath)
+}
+
+// startDockerDaemon은 플랫폼에 맞게 Docker 데몬 시작을 시도한다.
+func startDockerDaemon(dockerPath string) {
+	switch runtime.GOOS {
+	case "darwin":
+		fmt.Println("  Docker Desktop을 시작합니다...")
+		openCmd := exec.Command("open", "-a", "Docker")
+		if openErr := openCmd.Run(); openErr != nil {
+			fmt.Println("  ! Docker Desktop 시작 실패. 수동으로 시작하세요.")
+			return
+		}
+
+		// Docker 데몬 시작 대기 (최대 60초)
+		fmt.Print("  Docker 데몬 시작 대기 중...")
+		for i := 0; i < 30; i++ {
+			infoCmd := exec.Command(dockerPath, "info")
+			if infoCmd.Run() == nil {
+				fmt.Println()
+				printSuccess("Docker 데몬 시작됨")
+				return
+			}
+			time.Sleep(2 * time.Second)
+			fmt.Printf("\r  Docker 데몬 시작 대기 중... (%d초)", (i+1)*2)
+		}
+		fmt.Println()
+		fmt.Println("  ! Docker 데몬 시작 시간 초과 (60초)")
+
+	case "linux":
+		fmt.Println("  Docker 데몬을 시작하려면 다음을 실행하세요:")
+		fmt.Println("    sudo systemctl start docker")
+	}
+}
+
+// printDockerVersion은 Docker 버전 정보를 출력한다.
+func printDockerVersion(dockerPath string) {
 	versionCmd := exec.Command(dockerPath, "version", "--format", "{{.Server.Version}}")
 	versionOutput, versionErr := versionCmd.Output()
 	if versionErr == nil {
 		printSuccess(fmt.Sprintf("Docker %s 감지됨", strings.TrimSpace(string(versionOutput))))
 	} else {
-		// version 명령 실패 시 info 출력에서 추출 시도
-		_ = output // info 출력 사용 가능
 		printSuccess("Docker 감지됨")
 	}
 }
