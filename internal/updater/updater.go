@@ -3,6 +3,9 @@
 package updater
 
 import (
+	"archive/tar"
+	"archive/zip"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -116,7 +119,7 @@ func (u *Updater) DownloadAndReplace(release *Release) error {
 		_ = os.Remove(tmpFile)
 	}()
 
-	// SHA256 체크섬 검증
+	// SHA256 체크섬 검증 (아카이브 파일 기준)
 	if expectedChecksum != "" {
 		fmt.Printf("  체크섬 검증 중...\n")
 		if err := verifyChecksum(tmpFile, expectedChecksum); err != nil {
@@ -124,6 +127,16 @@ func (u *Updater) DownloadAndReplace(release *Release) error {
 		}
 		fmt.Printf("  체크섬 검증 완료\n")
 	}
+
+	// 아카이브에서 바이너리 추출
+	fmt.Printf("  아카이브 추출 중...\n")
+	extractedBinary, err := extractBinary(tmpFile, asset.Name)
+	if err != nil {
+		return fmt.Errorf("아카이브 추출 실패: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(extractedBinary)
+	}()
 
 	// 현재 바이너리 교체 (atomic rename)
 	currentBinary, err := os.Executable()
@@ -138,7 +151,7 @@ func (u *Updater) DownloadAndReplace(release *Release) error {
 	}
 
 	// 실행 권한 설정
-	if err := os.Chmod(tmpFile, 0755); err != nil {
+	if err := os.Chmod(extractedBinary, 0755); err != nil {
 		return fmt.Errorf("실행 권한 설정 실패: %w", err)
 	}
 
@@ -149,7 +162,7 @@ func (u *Updater) DownloadAndReplace(release *Release) error {
 	}
 
 	// 새 바이너리 이동
-	if err := os.Rename(tmpFile, currentBinary); err != nil {
+	if err := os.Rename(extractedBinary, currentBinary); err != nil {
 		// 실패 시 백업 복원
 		_ = os.Rename(backupPath, currentBinary)
 		return fmt.Errorf("새 바이너리 설치 실패: %w", err)
@@ -341,6 +354,108 @@ func (u *Updater) downloadAsset(asset *Asset) (string, error) {
 	if written == 0 {
 		_ = os.Remove(tmpFile.Name())
 		return "", fmt.Errorf("다운로드된 파일이 비어있습니다")
+	}
+
+	return tmpFile.Name(), nil
+}
+
+// extractBinary는 아카이브(.tar.gz 또는 .zip)에서 바이너리를 추출합니다.
+// 추출된 바이너리의 임시 파일 경로를 반환합니다.
+func extractBinary(archivePath, assetName string) (string, error) {
+	// 아카이브 내부에서 찾을 바이너리 이름
+	binaryName := "autopus-bridge"
+	if runtime.GOOS == "windows" {
+		binaryName = "autopus-bridge.exe"
+	}
+
+	if strings.HasSuffix(strings.ToLower(assetName), ".zip") {
+		return extractFromZip(archivePath, binaryName)
+	}
+
+	// .tar.gz 또는 .tgz로 간주
+	return extractFromTarGz(archivePath, binaryName)
+}
+
+// extractFromTarGz는 tar.gz 아카이브에서 바이너리를 추출합니다.
+func extractFromTarGz(archivePath, binaryName string) (string, error) {
+	f, err := os.Open(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("아카이브 파일 열기 실패: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	gr, err := gzip.NewReader(f)
+	if err != nil {
+		return "", fmt.Errorf("gzip 리더 생성 실패: %w", err)
+	}
+	defer func() { _ = gr.Close() }()
+
+	tr := tar.NewReader(gr)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", fmt.Errorf("tar 엔트리 읽기 실패: %w", err)
+		}
+
+		// 디렉토리는 건너뜀
+		if header.Typeflag == tar.TypeDir {
+			continue
+		}
+
+		// 파일명만 비교 (경로 포함 가능하므로 Base 사용)
+		entryName := filepath.Base(header.Name)
+		if entryName == binaryName {
+			return copyToTempFile(tr)
+		}
+	}
+
+	return "", fmt.Errorf("아카이브에서 '%s' 바이너리를 찾을 수 없습니다", binaryName)
+}
+
+// extractFromZip는 zip 아카이브에서 바이너리를 추출합니다.
+func extractFromZip(archivePath, binaryName string) (string, error) {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("zip 파일 열기 실패: %w", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	for _, f := range r.File {
+		// 디렉토리는 건너뜀
+		if f.FileInfo().IsDir() {
+			continue
+		}
+
+		// 파일명만 비교
+		entryName := filepath.Base(f.Name)
+		if entryName == binaryName {
+			rc, err := f.Open()
+			if err != nil {
+				return "", fmt.Errorf("zip 엔트리 열기 실패: %w", err)
+			}
+			defer func() { _ = rc.Close() }()
+
+			return copyToTempFile(rc)
+		}
+	}
+
+	return "", fmt.Errorf("아카이브에서 '%s' 바이너리를 찾을 수 없습니다", binaryName)
+}
+
+// copyToTempFile는 reader의 내용을 임시 파일에 복사하고 경로를 반환합니다.
+func copyToTempFile(r io.Reader) (string, error) {
+	tmpFile, err := os.CreateTemp("", "autopus-bridge-extracted-*")
+	if err != nil {
+		return "", fmt.Errorf("임시 파일 생성 실패: %w", err)
+	}
+	defer func() { _ = tmpFile.Close() }()
+
+	if _, err := io.Copy(tmpFile, r); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		return "", fmt.Errorf("바이너리 추출 실패: %w", err)
 	}
 
 	return tmpFile.Name(), nil

@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.1] - 2026-02-25
+
+### Fixed
+
+- Self-update (`autopus update`) 실행 후 바이너리가 실행되지 않는 치명적 버그 수정
+  - `downloadAsset()`이 tar.gz/zip 아카이브를 추출하지 않고 그대로 바이너리로 교체하던 문제
+  - `extractBinary()` 함수 추가: tar.gz/zip 아카이브에서 바이너리 자동 추출
+  - tar.gz (`archive/tar` + `compress/gzip`) 및 zip (`archive/zip`) 포맷 모두 지원
+  - GoReleaser 중첩 경로 (`autopus-bridge_1.3.0_darwin_arm64/autopus-bridge`) 정상 처리
+- Updater 패키지 테스트 추가 (tar.gz, zip, 중첩 경로, 에러 케이스)
+
 ## [1.3.0] - 2026-02-25
 
 ### Added
@@ -80,6 +91,7 @@ Previously located at `github.com/anthropics/acos/cmd/local-agent-bridge`.
 - Protocol types extracted to separate SDK: `github.com/insajin/autopus-agent-protocol`
 - See [docs/MIGRATION.md](docs/MIGRATION.md) for upgrade instructions
 
+[1.3.1]: https://github.com/insajin/autopus-bridge/releases/tag/v1.3.1
 [1.3.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.3.0
 [1.1.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.1.0
 [1.0.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.0.0
