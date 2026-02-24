@@ -195,6 +195,15 @@ func getBusinessToolManifest() []businessTool {
 			},
 		},
 		{
+			Name:     "tmux",
+			Category: toolCategoryDeveloper,
+			Purpose:  "터미널 멀티플렉서",
+			InstallCmd: map[string]string{
+				"darwin": "brew install tmux",
+				"linux":  "sudo apt-get install -y tmux",
+			},
+		},
+		{
 			Name:     "hledger",
 			Category: toolCategoryOptional,
 			Purpose:  "복식부기 회계",
@@ -272,6 +281,8 @@ func getToolVersion(name string) string {
 		cmd = exec.Command("rg", "--version")
 	case "fzf":
 		cmd = exec.Command("fzf", "--version")
+	case "tmux":
+		cmd = exec.Command("tmux", "-V")
 	default:
 		return ""
 	}

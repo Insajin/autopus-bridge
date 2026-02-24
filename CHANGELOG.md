@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-02-25
+
+### Removed
+
+- Claude Code Autopus 플러그인 완전 제거 (경로 A Dispatch Mode + MCP Tool Injection만 사용)
+  - `IsPluginInstalled()`, `InstallPlugin()`, `InstallPluginTo()`, `PluginVersion()` 함수 삭제
+  - 임베디드 플러그인 파일 삭제 (`.claude-plugin/`, `agents/`, `commands/`, `hooks/`)
+  - `up` 명령의 플러그인 설치 블록 제거, `setup` 명령의 플러그인 상태 표시를 MCP 상태로 변경
+  - 플러그인 관련 테스트 12개 삭제
+
+### Changed
+
+- 임베디드 디렉토리 `plugin-dist/` -> `skill-dist/`로 리네임 (Agent Skill 전용)
+- 임베디드 변수 `pluginFiles` -> `skillFiles`로 리네임
+
+### Added
+
+- `tmux` 터미널 멀티플렉서를 비즈니스 도구 매니페스트에 추가 (developer 카테고리)
+
 ## [1.3.1] - 2026-02-25
 
 ### Fixed

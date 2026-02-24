@@ -532,11 +532,7 @@ func printSetupSummary(providers []providerInfo, serverURL, workDir, configPath 
 	geminiInfo, _ := aitools.DetectGeminiCLI()
 
 	if claudeInfo != nil && claudeInfo.Installed {
-		if aitools.IsPluginInstalled() {
-			fmt.Println("  [v] Claude Code: 플러그인 설치됨")
-		} else {
-			fmt.Println("  [ ] Claude Code: 플러그인 미설치")
-		}
+		fmt.Println("  [v] Claude Code: MCP 설정됨")
 	}
 	if codexInfo != nil && codexInfo.Installed {
 		fmt.Println("  [v] Codex CLI: 감지됨")

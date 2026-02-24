@@ -9,7 +9,7 @@ import (
 )
 
 // agentSkillSourcePath는 임베디드 파일시스템 내 스킬 파일의 경로입니다.
-const agentSkillSourcePath = "plugin-dist/skills/autopus-platform/SKILL.md"
+const agentSkillSourcePath = "skill-dist/skills/autopus-platform/SKILL.md"
 
 // agentSkillRelDir는 대상 디렉토리 내 스킬이 설치될 하위 경로입니다.
 const agentSkillRelDir = "autopus-platform"
@@ -46,7 +46,7 @@ func InstallAgentSkill() error {
 // targetDir는 ~/.agents/skills/ 에 해당하는 상위 디렉토리입니다.
 func InstallAgentSkillTo(targetDir string) error {
 	// 임베디드 파일에서 SKILL.md 읽기
-	data, err := pluginFiles.ReadFile(agentSkillSourcePath)
+	data, err := skillFiles.ReadFile(agentSkillSourcePath)
 	if err != nil {
 		return fmt.Errorf("임베디드 스킬 파일 읽기 실패 (%s): %w", agentSkillSourcePath, err)
 	}

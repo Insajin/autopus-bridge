@@ -1,10 +1,8 @@
-// claude.go는 Claude Code 감지, 플러그인 설치, MCP 설정 기능을 제공합니다.
+// claude.go는 Claude Code 감지 및 MCP 설정 기능을 제공합니다.
 package aitools
 
 import (
-	"encoding/json"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,93 +39,6 @@ func DetectClaudeCode() (*AIToolInfo, error) {
 	}
 
 	return info, nil
-}
-
-// IsPluginInstalled는 Autopus 플러그인이 이미 설치되어 있는지 확인합니다.
-func IsPluginInstalled() bool {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return false
-	}
-
-	pluginJSON := filepath.Join(home, ".claude", "plugins", "autopus", ".claude-plugin", "plugin.json")
-	_, err = os.Stat(pluginJSON)
-	return err == nil
-}
-
-// InstallPlugin은 Autopus Claude Code 플러그인을 ~/.claude/plugins/autopus/에 설치합니다.
-func InstallPlugin() error {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return fmt.Errorf("홈 디렉토리 확인 실패: %w", err)
-	}
-
-	pluginDir := filepath.Join(home, ".claude", "plugins", "autopus")
-
-	// 이미 설치된 경우 건너뜀
-	if IsPluginInstalled() {
-		return nil
-	}
-
-	// 임베디드 파일을 대상 디렉토리에 복사
-	return installPluginTo(pluginDir)
-}
-
-// InstallPluginTo는 지정된 경로에 플러그인을 설치합니다 (테스트용).
-func InstallPluginTo(targetDir string) error {
-	return installPluginTo(targetDir)
-}
-
-// installPluginTo는 임베디드 플러그인 파일을 대상 디렉토리에 복사합니다.
-func installPluginTo(targetDir string) error {
-	return fs.WalkDir(pluginFiles, "plugin-dist", func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		// "plugin-dist" 접두사 제거하여 상대 경로 계산
-		relPath, relErr := filepath.Rel("plugin-dist", path)
-		if relErr != nil {
-			return fmt.Errorf("상대 경로 계산 실패 (%s): %w", path, relErr)
-		}
-		if relPath == "." {
-			return nil
-		}
-		targetPath := filepath.Join(targetDir, relPath)
-
-		if d.IsDir() {
-			return os.MkdirAll(targetPath, 0755)
-		}
-
-		data, readErr := pluginFiles.ReadFile(path)
-		if readErr != nil {
-			return fmt.Errorf("임베디드 파일 읽기 실패 (%s): %w", path, readErr)
-		}
-
-		// 상위 디렉토리 확인
-		if mkErr := os.MkdirAll(filepath.Dir(targetPath), 0755); mkErr != nil {
-			return fmt.Errorf("디렉토리 생성 실패: %w", mkErr)
-		}
-
-		return os.WriteFile(targetPath, data, 0644)
-	})
-}
-
-// PluginVersion은 임베디드 플러그인의 버전을 반환합니다.
-func PluginVersion() string {
-	data, err := pluginFiles.ReadFile("plugin-dist/.claude-plugin/plugin.json")
-	if err != nil {
-		return "unknown"
-	}
-
-	var manifest struct {
-		Version string `json:"version"`
-	}
-	if jsonErr := json.Unmarshal(data, &manifest); jsonErr != nil {
-		return "unknown"
-	}
-
-	return manifest.Version
 }
 
 // ConfigureClaudeCodeMCP는 Claude Code의 .mcp.json에 Autopus MCP 서버를 설정합니다.
