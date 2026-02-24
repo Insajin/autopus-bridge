@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+
+	"github.com/insajin/autopus-bridge/internal/approval"
 )
 
 // Registry는 AI 프로바이더를 관리하는 레지스트리입니다.
@@ -169,6 +171,19 @@ type RegistryConfig struct {
 	// ClaudeCLITimeout은 CLI 실행 타임아웃(초)입니다.
 	// 기본값: 300
 	ClaudeCLITimeout int
+	// ClaudeExecutionMode는 Claude 실행 모드입니다 ("auto-execute" | "interactive").
+	// "interactive"일 때 PTY + 훅 서버 기반의 인터랙티브 프로바이더를 사용합니다.
+	// 기본값: "auto-execute"
+	ClaudeExecutionMode string
+	// ClaudeApprovalPolicy는 인터랙티브 모드의 승인 정책입니다.
+	// "auto-execute", "auto-approve", "agent-approve", "human-approve" 중 하나.
+	// 기본값: "auto-approve"
+	ClaudeApprovalPolicy string
+	// ClaudeHookServerPort는 인터랙티브 모드의 훅 서버 포트입니다 (0 = 자동 할당).
+	ClaudeHookServerPort int
+	// ClaudeApprovalTimeout은 인터랙티브 모드의 승인 타임아웃(초)입니다.
+	// 기본값: 300
+	ClaudeApprovalTimeout int
 
 	// GeminiAPIKey는 Gemini API 키입니다.
 	GeminiAPIKey string
@@ -266,9 +281,15 @@ func initializeClaudeProvider(cfg RegistryConfig, logger zerolog.Logger) (Provid
 		cliTimeout = 300
 	}
 
+	// 인터랙티브 모드 확인: execution_mode가 "interactive"이고 CLI 모드일 때
+	executionMode := cfg.ClaudeExecutionMode
+	if executionMode == "" {
+		executionMode = "auto-execute"
+	}
+
 	switch mode {
 	case "api":
-		// API 모드: API 키 필수
+		// API 모드: API 키 필수 (인터랙티브 모드 해당 없음)
 		if cfg.ClaudeAPIKey == "" {
 			return nil, nil // API 키가 없으면 건너뜀
 		}
@@ -279,10 +300,18 @@ func initializeClaudeProvider(cfg RegistryConfig, logger zerolog.Logger) (Provid
 		if !IsCLIAvailable(cliPath) {
 			return nil, fmt.Errorf("%w: %s", ErrCLINotFound, cliPath)
 		}
+		// 인터랙티브 모드일 경우 InteractiveClaudeCLIProvider 사용
+		if executionMode == "interactive" {
+			return initializeClaudeInteractiveProvider(cfg, cliPath, cliTimeout)
+		}
 		return initializeClaudeCLIProvider(cfg, cliPath, cliTimeout)
 
 	case "hybrid":
-		// 하이브리드 모드: CLI 우선, API 폴백
+		// 하이브리드 모드: 인터랙티브 모드일 경우 InteractiveClaudeCLIProvider 사용
+		if executionMode == "interactive" && IsCLIAvailable(cliPath) {
+			return initializeClaudeInteractiveProvider(cfg, cliPath, cliTimeout)
+		}
+		// 일반 하이브리드 모드: CLI 우선, API 폴백
 		return initializeClaudeHybridProvider(cfg, cliPath, cliTimeout, logger)
 
 	default:
@@ -343,6 +372,37 @@ func initializeClaudeHybridProvider(cfg RegistryConfig, cliPath string, cliTimeo
 		apiOpts,
 		WithHybridLogger(logger),
 	)
+}
+
+// initializeClaudeInteractiveProvider는 인터랙티브 모드의 Claude 프로바이더를 초기화합니다.
+// PTY + 훅 서버를 사용하여 Claude Code를 인터랙티브 모드로 실행합니다.
+func initializeClaudeInteractiveProvider(cfg RegistryConfig, cliPath string, cliTimeout int) (*InteractiveClaudeCLIProvider, error) {
+	// 승인 정책 파싱
+	policyStr := cfg.ClaudeApprovalPolicy
+	if policyStr == "" {
+		policyStr = "auto-approve"
+	}
+	policy := approval.ApprovalPolicy(policyStr)
+
+	// 승인 타임아웃 설정
+	approvalTimeout := cfg.ClaudeApprovalTimeout
+	if approvalTimeout <= 0 {
+		approvalTimeout = 300 // 5분
+	}
+
+	opts := []InteractiveClaudeCLIProviderOption{
+		WithInteractiveCLIPath(cliPath),
+		WithInteractiveTimeout(time.Duration(cliTimeout) * time.Second),
+		WithInteractiveApprovalPolicy(policy),
+		WithInteractiveHookServerPort(cfg.ClaudeHookServerPort),
+		WithInteractiveApprovalTimeout(time.Duration(approvalTimeout) * time.Second),
+	}
+
+	if cfg.ClaudeDefaultModel != "" {
+		opts = append(opts, WithInteractiveDefaultModel(cfg.ClaudeDefaultModel))
+	}
+
+	return NewInteractiveClaudeCLIProvider(opts...)
 }
 
 // GetForTask resolves a provider using explicit provider name first,

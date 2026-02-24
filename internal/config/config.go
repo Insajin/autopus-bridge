@@ -107,6 +107,17 @@ type ProviderConfig struct {
 	ApprovalPolicy string `mapstructure:"approval_policy"`
 	// ChatGPTAuthEnv는 ChatGPT 인증 토큰을 가져올 환경변수 이름입니다.
 	ChatGPTAuthEnv string `mapstructure:"chatgpt_auth_env"`
+	// ExecutionMode is the execution mode ("auto-execute" | "interactive").
+	// Default: "auto-execute"
+	// This is SEPARATE from Mode. Mode controls which Provider implementation
+	// to use. ExecutionMode controls whether to use interactive (PTY + hooks)
+	// or auto-execute (--print).
+	ExecutionMode string `mapstructure:"execution_mode"`
+	// HookServerPort is the local hook server port (0 = auto-assign).
+	// Only used in interactive mode for Claude Code.
+	HookServerPort int `mapstructure:"hook_server_port"`
+	// ApprovalTimeout is the approval timeout in seconds (default: 300).
+	ApprovalTimeout int `mapstructure:"approval_timeout"`
 }
 
 // LoggingConfig는 로깅 설정입니다.
@@ -197,6 +208,33 @@ func (p *ProviderConfig) GetApprovalPolicy() string {
 	return p.ApprovalPolicy
 }
 
+// GetExecutionMode returns the execution mode.
+// Returns "auto-execute" as default if not set.
+func (p *ProviderConfig) GetExecutionMode() string {
+	if p.ExecutionMode == "" {
+		return "auto-execute"
+	}
+	return p.ExecutionMode
+}
+
+// GetHookServerPort returns the hook server port.
+// Returns 0 as default (auto-assign) if not set.
+func (p *ProviderConfig) GetHookServerPort() int {
+	if p.HookServerPort <= 0 {
+		return 0
+	}
+	return p.HookServerPort
+}
+
+// GetApprovalTimeout returns the approval timeout in seconds.
+// Returns 300 as default if not set.
+func (p *ProviderConfig) GetApprovalTimeout() int {
+	if p.ApprovalTimeout <= 0 {
+		return 300
+	}
+	return p.ApprovalTimeout
+}
+
 // GetChatGPTAuthKey는 ChatGPT 인증 토큰을 환경변수에서 가져옵니다.
 func (p *ProviderConfig) GetChatGPTAuthKey() string {
 	if p.ChatGPTAuthEnv == "" {
@@ -219,22 +257,32 @@ func (p *ProviderConfig) IsCLIAvailable() bool {
 
 // IsAvailable은 프로바이더가 사용 가능한지 확인합니다.
 // 모드에 따라 API 키 또는 CLI 가용성을 확인합니다.
+// Interactive execution mode additionally requires CLI availability.
 func (p *ProviderConfig) IsAvailable() bool {
 	mode := p.GetMode()
+
+	var available bool
 	switch mode {
 	case "api":
-		return p.HasAPIKey()
+		available = p.HasAPIKey()
 	case "cli":
-		return p.IsCLIAvailable()
+		available = p.IsCLIAvailable()
 	case "hybrid":
 		// 하이브리드 모드는 CLI 또는 API 중 하나만 있으면 됨
-		return p.IsCLIAvailable() || p.HasAPIKey()
+		available = p.IsCLIAvailable() || p.HasAPIKey()
 	case "app-server":
 		// App Server 모드는 CLI 바이너리와 인증(API Key 또는 ChatGPT 토큰)이 필요
-		return p.IsCLIAvailable() && (p.HasAPIKey() || p.HasChatGPTAuth())
+		available = p.IsCLIAvailable() && (p.HasAPIKey() || p.HasChatGPTAuth())
 	default:
 		return false
 	}
+
+	// Interactive execution mode requires CLI availability regardless of Mode.
+	if available && p.GetExecutionMode() == "interactive" {
+		return p.IsCLIAvailable()
+	}
+
+	return available
 }
 
 // Validate는 설정의 유효성을 검사합니다.
@@ -260,6 +308,19 @@ func (c *Config) Validate() error {
 	// CLI 모드인 경우 CLI 가용성 확인
 	if claudeMode == "cli" && !c.Providers.Claude.IsCLIAvailable() {
 		return fmt.Errorf("claude CLI 모드가 설정되었지만 claude 바이너리를 찾을 수 없습니다: %s", c.Providers.Claude.GetCLIPath())
+	}
+
+	// Claude ExecutionMode validation
+	claudeExecMode := c.Providers.Claude.GetExecutionMode()
+	validExecModes := map[string]bool{
+		"auto-execute": true,
+		"interactive":  true,
+	}
+	if !validExecModes[claudeExecMode] {
+		return fmt.Errorf("invalid Claude execution_mode: %s (must be auto-execute or interactive)", claudeExecMode)
+	}
+	if claudeExecMode == "interactive" && !c.Providers.Claude.IsCLIAvailable() {
+		return fmt.Errorf("claude interactive execution_mode requires CLI availability: %s", c.Providers.Claude.GetCLIPath())
 	}
 
 	// Gemini 모드 검증

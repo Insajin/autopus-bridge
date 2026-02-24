@@ -30,7 +30,9 @@ var criticalMessageTypes = map[string]bool{
 	ws.AgentMsgMCPStart:    true, // SPEC-SKILL-V2-001 Block D: MCP 서버 시작 요청
 	ws.AgentMsgMCPReady:    true, // SPEC-SKILL-V2-001 Block D: MCP 서버 준비 완료
 	ws.AgentMsgMCPStop:     true, // SPEC-SKILL-V2-001 Block D: MCP 서버 중지 요청
-	ws.AgentMsgMCPError:    true, // SPEC-SKILL-V2-001 Block D: MCP 서버 에러
+	ws.AgentMsgMCPError:          true, // SPEC-SKILL-V2-001 Block D: MCP 서버 에러
+	ws.AgentMsgToolApprovalReq:  true, // SPEC-INTERACTIVE-CLI-001: 도구 승인 요청 서명 필수
+	ws.AgentMsgToolApprovalResp: true, // SPEC-INTERACTIVE-CLI-001: 도구 승인 응답 서명 필수
 }
 
 // MessageSigner는 HMAC-SHA256 기반 메시지 서명 및 검증을 담당합니다 (SEC-P2-02).

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/insajin/autopus-agent-protocol"
+	"github.com/insajin/autopus-bridge/internal/approval"
 	"github.com/insajin/autopus-bridge/internal/provider"
 	"github.com/insajin/autopus-bridge/internal/websocket"
 	"github.com/rs/zerolog"
@@ -288,6 +289,25 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 		return ws.TaskResultPayload{}, &TaskError{
 			Code:    ErrorCodeProviderNotFound,
 			Message: fmt.Sprintf("모델 '%s'에 대한 프로바이더를 찾을 수 없습니다: %v", task.Model, err),
+		}
+	}
+
+	// SPEC-INTERACTIVE-CLI-001: ApprovalRelay 지원 프로바이더에 승인 핸들러 설정
+	if task.ApprovalPolicy != "" && task.ApprovalPolicy != string(approval.ApprovalPolicyAutoExecute) {
+		if relay, ok := prov.(approval.ApprovalRelay); ok && relay.SupportsApproval() {
+			policy := approval.ApprovalPolicy(task.ApprovalPolicy)
+			timeout := 5 * time.Minute
+			if task.Timeout > 0 {
+				timeout = time.Duration(task.Timeout) * time.Second
+			}
+			router := approval.NewApprovalRouter(policy, timeout)
+			relay.SetApprovalHandler(router.HandleApproval)
+
+			e.logger.Info().
+				Str("execution_id", task.ExecutionID).
+				Str("approval_policy", task.ApprovalPolicy).
+				Str("provider", prov.Name()).
+				Msg("ApprovalRelay 활성화됨")
 		}
 	}
 

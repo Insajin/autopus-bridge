@@ -42,6 +42,7 @@ require (
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/chromedp/cdproto v0.0.0-20250724212937-08a3db8b4327 // indirect
 	github.com/chromedp/sysutil v1.1.0 // indirect
+	github.com/creack/pty v1.1.24 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
@@ -111,3 +112,5 @@ require (
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 )
+
+replace github.com/insajin/autopus-agent-protocol => /Users/joseph/Documents/YNS/Autopus/repos/autopus-agent-protocol

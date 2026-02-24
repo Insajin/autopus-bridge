@@ -834,6 +834,11 @@ func (c *Client) SendMCPHealthReport(payload ws.MCPHealthReportPayload) error {
 	return c.sendMessage(ws.AgentMsgMCPHealthReport, payload)
 }
 
+// SendToolApprovalRequest는 도구 승인 요청을 서버로 전송합니다 (SPEC-INTERACTIVE-CLI-001).
+func (c *Client) SendToolApprovalRequest(payload ws.ToolApprovalRequestPayload) error {
+	return c.sendMessage(ws.AgentMsgToolApprovalReq, payload)
+}
+
 // sendMessageWithID는 특정 ID를 가진 메시지를 생성하여 전송합니다.
 func (c *Client) sendMessageWithID(msgType, id string, payload interface{}) error {
 	data, err := json.Marshal(payload)

@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/insajin/autopus-bridge/internal/approval"
 	"github.com/insajin/autopus-codex-rpc/client"
 	"github.com/insajin/autopus-codex-rpc/protocol"
 	"github.com/rs/zerolog"
@@ -330,6 +331,7 @@ type CodexAppServerProvider struct {
 	approvalPolicy string
 	authMethod     string // "apiKey" 또는 "chatgptAuthTokens"
 	authKey        string // 실제 키 값
+	rpcRelay       *approval.RPCRelay
 	logger         zerolog.Logger
 }
 
@@ -366,6 +368,7 @@ func NewCodexAppServerProvider(cliPath string, opts ...CodexAppServerOption) (*C
 	p := &CodexAppServerProvider{
 		approvalPolicy: "auto-approve",
 		authMethod:     "apiKey",
+		rpcRelay:       approval.NewRPCRelay("codex"),
 		logger:         zerolog.New(os.Stderr).With().Timestamp().Logger(),
 	}
 
@@ -600,7 +603,13 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		}
 
 		decision := "accept"
-		if approvalPolicy == "deny-all" {
+		if p.rpcRelay != nil && p.rpcRelay.SupportsApproval() {
+			toolInput, _ := json.Marshal(approvalReq)
+			d, err := p.rpcRelay.HandleRPCApproval(context.Background(), thread.ThreadID, "command_execution", toolInput)
+			if err != nil || d.Decision == "deny" {
+				decision = "decline"
+			}
+		} else if approvalPolicy == "deny-all" {
 			decision = "decline"
 		}
 
@@ -624,7 +633,13 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		}
 
 		decision := "accept"
-		if approvalPolicy == "deny-all" {
+		if p.rpcRelay != nil && p.rpcRelay.SupportsApproval() {
+			toolInput, _ := json.Marshal(approvalReq)
+			d, err := p.rpcRelay.HandleRPCApproval(context.Background(), thread.ThreadID, "file_change", toolInput)
+			if err != nil || d.Decision == "deny" {
+				decision = "decline"
+			}
+		} else if approvalPolicy == "deny-all" {
 			decision = "decline"
 		}
 
@@ -690,3 +705,16 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 func (p *CodexAppServerProvider) Close() error {
 	return p.process.Stop()
 }
+
+// SupportsApproval은 이 프로바이더가 인터랙티브 승인을 지원하는지 반환합니다.
+func (p *CodexAppServerProvider) SupportsApproval() bool {
+	return p.rpcRelay.SupportsApproval()
+}
+
+// SetApprovalHandler는 승인 요청을 처리할 핸들러를 등록합니다.
+func (p *CodexAppServerProvider) SetApprovalHandler(handler approval.ApprovalHandler) {
+	p.rpcRelay.SetApprovalHandler(handler)
+}
+
+// compile-time 인터페이스 구현 확인
+var _ approval.ApprovalRelay = (*CodexAppServerProvider)(nil)

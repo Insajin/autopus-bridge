@@ -45,6 +45,10 @@ Claude Code가 Autopus 플랫폼 기능에 MCP 도구/리소스로 접근할 수
 
 // runMCPServe는 MCP 서버를 시작합니다.
 func runMCPServe(cmd *cobra.Command, args []string) error {
+	// SPEC-INTERACTIVE-CLI-001 Batch D: Plugin Mode deprecation warning.
+	fmt.Fprintln(os.Stderr, "WARNING: Plugin Mode (mcp-serve) is deprecated. Use Dispatch Mode with MCP Tool Injection instead.")
+	fmt.Fprintln(os.Stderr, "See SPEC-INTERACTIVE-CLI-001 for migration guidance.")
+
 	// 로거 초기화 (stderr로 출력, stdout은 MCP stdio에서 사용)
 	logger := zerolog.New(zerolog.ConsoleWriter{Out: os.Stderr}).
 		With().
