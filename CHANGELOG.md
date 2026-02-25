@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-02-26
+
+### Added
+
+- Agent Browser 웹 자동화 핸들러 통합 (SPEC-BROWSER-AGENT-001)
+  - Playwright 기반 브라우저 세션 관리 (`internal/agentbrowser/`)
+  - 브라우저 액션 실행, 헬스체크, CI/CD 파이프라인 지원
+  - WebSocket 라우터에 Agent Browser 핸들러 등록
+  - 세션 재연결 시 Agent Browser 상태 복원 지원
+- Device Auth Deprecation 메트릭 및 Bridge 버전 추적 (SPEC-BRIDGE-DEVAUTH-001 M4)
+- Device Auth 핸들러 통합 테스트 (SPEC-BRIDGE-DEVAUTH-001 M5)
+
+### Fixed
+
+- Computer Use 워밍 풀 보충 무한 재시도 방지 및 Dockerfile 탐색 개선
+- JWT exp 불일치 수정 (refresh.go, login.go, token_refresher.go)
+
 ## [1.5.0] - 2026-02-26
 
 ### Changed
