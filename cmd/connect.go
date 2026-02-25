@@ -98,7 +98,17 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				// 만료된 토큰 자동 갱신 시도
 				logger.Info().Msg("토큰이 만료되어 자동 갱신을 시도합니다...")
 				if err := auth.RefreshAccessToken(creds); err != nil {
-					logger.Warn().Err(err).Msg("토큰 자동 갱신 실패. 'lab login'으로 다시 로그인하세요.")
+					// REQ-UX-002: 갱신 실패 시 자동 재인증 시도
+					logger.Warn().Err(err).Msg("토큰 자동 갱신 실패, 브라우저 재인증 시도")
+					fmt.Println("  토큰 갱신에 실패했습니다. 브라우저에서 재인증을 시작합니다...")
+					fmt.Println()
+					newCreds, authErr := performBrowserAuthWithFallback()
+					if authErr != nil {
+						return fmt.Errorf("재인증 실패: %w", authErr)
+					}
+					authToken = newCreds.AccessToken
+					creds = newCreds
+					fmt.Printf("  ✓ 재인증 성공: %s\n", newCreds.UserEmail)
 				} else {
 					authToken = creds.AccessToken
 					logger.Info().
@@ -106,7 +116,17 @@ func runConnect(cmd *cobra.Command, args []string) error {
 						Msg("토큰 자동 갱신 성공")
 				}
 			} else {
-				logger.Warn().Msg("저장된 인증 정보가 만료되었습니다. 'lab login'으로 다시 로그인하세요.")
+				// REQ-UX-002: refresh token 없이 만료된 경우에도 자동 재인증
+				logger.Warn().Msg("저장된 인증 정보가 만료되었습니다. 브라우저 재인증 시도")
+				fmt.Println("  저장된 인증 정보가 만료되었습니다. 브라우저에서 재인증을 시작합니다...")
+				fmt.Println()
+				newCreds, authErr := performBrowserAuthWithFallback()
+				if authErr != nil {
+					return fmt.Errorf("재인증 실패: %w", authErr)
+				}
+				authToken = newCreds.AccessToken
+				creds = newCreds
+				fmt.Printf("  ✓ 재인증 성공: %s\n", newCreds.UserEmail)
 			}
 		}
 	}

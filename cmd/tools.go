@@ -109,8 +109,8 @@ func getBusinessToolManifest() []businessTool {
 			Category: toolCategoryRecommended,
 			Purpose:  "CSV 처리 (csvstat, csvsql)",
 			InstallCmd: map[string]string{
-				"darwin": "pip3 install csvkit",
-				"linux":  "pip3 install csvkit",
+				"darwin": "pipx install csvkit",
+				"linux":  "pipx install csvkit",
 			},
 		},
 		{

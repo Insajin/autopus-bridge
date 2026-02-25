@@ -246,7 +246,64 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	// Delegate to the existing connect logic
-	return runConnect(cmd, nil)
+	connectErr := runConnect(cmd, nil)
+	if connectErr == nil {
+		return nil
+	}
+
+	// REQ-UX-001: 인증 실패 시 자동 재인증 후 1회 재시도
+	if isAuthError(connectErr) {
+		fmt.Println()
+		fmt.Println("  서버 인증에 실패했습니다. 자동으로 재인증을 시도합니다...")
+		fmt.Println()
+
+		newCreds, authErr := performBrowserAuthWithFallback()
+		if authErr != nil {
+			printError(fmt.Sprintf("재인증 실패: %v", authErr))
+			printFixSuggestion("connection", authErr)
+			return fmt.Errorf("서버 연결 실패 (재인증 실패): %w", authErr)
+		}
+
+		printSuccess(fmt.Sprintf("재인증 성공: %s", newCreds.UserEmail))
+		fmt.Println()
+		fmt.Println("  서버에 다시 연결합니다...")
+		fmt.Println()
+
+		return runConnect(cmd, nil)
+	}
+
+	// 인증 외 에러는 그대로 반환
+	printFixSuggestion("connection", connectErr)
+	return connectErr
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth Error Detection (REQ-UX-001)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// isAuthError는 에러가 인증 관련 에러인지 판단합니다.
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	authPatterns := []string{
+		"인증 실패",
+		"인증 거부",
+		"authentication failed",
+		"authentication error",
+		"unauthorized",
+		"token expired",
+		"토큰 만료",
+		"토큰이 만료",
+		"서버 인증",
+	}
+	for _, p := range authPatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -592,6 +649,107 @@ func printDockerVersion(dockerPath string) {
 	}
 }
 
+// printDockerBuildFailureGuide는 Docker 빌드 실패 출력을 분석하여 원인별 해결 안내를 제공한다.
+func printDockerBuildFailureGuide(buildOutput string) {
+	lower := strings.ToLower(buildOutput)
+
+	fmt.Println()
+	switch {
+	case strings.Contains(lower, "no space left on device"):
+		fmt.Println("  원인: 디스크 공간이 부족합니다")
+		fmt.Println()
+		fmt.Println("  해결 방법:")
+		fmt.Println("    1. docker system prune -a  (사용하지 않는 Docker 데이터 정리)")
+		fmt.Println("    2. 정리 후 다시 시도: autopus up")
+
+	case strings.Contains(lower, "network") || strings.Contains(lower, "timeout") ||
+		strings.Contains(lower, "could not resolve") || strings.Contains(lower, "dial tcp"):
+		fmt.Println("  원인: 네트워크 연결 문제 (베이스 이미지 다운로드 실패)")
+		fmt.Println()
+		fmt.Println("  해결 방법:")
+		fmt.Println("    1. 인터넷 연결을 확인하세요")
+		fmt.Println("    2. VPN을 사용 중이라면 잠시 끄고 다시 시도하세요")
+		fmt.Println("    3. 다시 시도: autopus up")
+
+	case strings.Contains(lower, "permission denied") || strings.Contains(lower, "access denied"):
+		fmt.Println("  원인: Docker 권한 부족")
+		fmt.Println()
+		fmt.Println("  해결 방법:")
+		if runtime.GOOS == "linux" {
+			fmt.Println("    1. sudo usermod -aG docker $USER")
+			fmt.Println("    2. 로그아웃 후 다시 로그인")
+			fmt.Println("    3. 다시 시도: autopus up")
+		} else {
+			fmt.Println("    1. Docker Desktop이 실행 중인지 확인하세요")
+			fmt.Println("    2. 다시 시도: autopus up")
+		}
+
+	case strings.Contains(lower, "daemon is not running") || strings.Contains(lower, "cannot connect"):
+		fmt.Println("  원인: Docker 데몬이 실행되고 있지 않습니다")
+		fmt.Println()
+		fmt.Println("  해결 방법:")
+		if runtime.GOOS == "darwin" {
+			fmt.Println("    1. Docker Desktop 앱을 실행하세요")
+		} else {
+			fmt.Println("    1. sudo systemctl start docker")
+		}
+		fmt.Println("    2. 다시 시도: autopus up")
+
+	default:
+		// 알 수 없는 에러 - 원본 출력의 마지막 몇 줄을 보여줌
+		fmt.Println("  원인을 자동으로 파악하지 못했습니다")
+		fmt.Println()
+		lines := strings.Split(strings.TrimSpace(buildOutput), "\n")
+		// 마지막 5줄만 표시
+		start := 0
+		if len(lines) > 5 {
+			start = len(lines) - 5
+		}
+		fmt.Println("  빌드 로그 (마지막 부분):")
+		for _, line := range lines[start:] {
+			fmt.Printf("    %s\n", strings.TrimSpace(line))
+		}
+		fmt.Println()
+		fmt.Println("  수동 빌드를 시도하세요:")
+		fmt.Println("    docker build -t autopus/chromium-sandbox:latest docker/chromium-sandbox/")
+	}
+
+	fmt.Println()
+	fmt.Println("  이 단계는 선택사항입니다. Computer Use 없이 계속 진행합니다.")
+}
+
+// findDockerfileDir는 지정된 이미지 이름에 해당하는 Dockerfile 디렉토리를 탐색한다.
+// 실행 파일 위치 기준 또는 알려진 경로에서 docker/<name>/Dockerfile을 찾는다.
+func findDockerfileDir(imageDirName string) string {
+	// 1. 실행 파일 위치 기준 탐색
+	execPath, err := os.Executable()
+	if err == nil {
+		execDir := filepath.Dir(execPath)
+		// 실행 파일과 같은 레벨 또는 상위에서 docker/ 디렉토리 탐색
+		candidates := []string{
+			filepath.Join(execDir, "docker", imageDirName),
+			filepath.Join(execDir, "..", "docker", imageDirName),
+			filepath.Join(execDir, "..", "..", "docker", imageDirName),
+		}
+		for _, candidate := range candidates {
+			if _, statErr := os.Stat(filepath.Join(candidate, "Dockerfile")); statErr == nil {
+				return candidate
+			}
+		}
+	}
+
+	// 2. 현재 작업 디렉토리 기준
+	cwd, cwdErr := os.Getwd()
+	if cwdErr == nil {
+		candidate := filepath.Join(cwd, "docker", imageDirName)
+		if _, statErr := os.Stat(filepath.Join(candidate, "Dockerfile")); statErr == nil {
+			return candidate
+		}
+	}
+
+	return ""
+}
+
 // stepChromiumSandboxImage는 Chromium Sandbox Docker 이미지와 네트워크를 준비한다.
 // Docker가 없으면 건너뛴다 (NON-BLOCKING).
 // SPEC-COMPUTER-USE-002 Phase 2.
@@ -620,11 +778,31 @@ func stepChromiumSandboxImage() {
 		// 이미지가 없으면 풀 시도
 		fmt.Println("  이미지 가져오는 중:", imageName)
 		pullCmd := exec.Command(dockerPath, "pull", imageName)
-		pullCmd.Stdout = os.Stdout
-		pullCmd.Stderr = os.Stderr
-		if pullErr := pullCmd.Run(); pullErr != nil {
-			fmt.Println("  ! 이미지 풀 실패 (로컬 빌드가 필요할 수 있습니다)")
-			fmt.Printf("    docker build -t %s .\n", imageName)
+		pullOutput, pullErr := pullCmd.CombinedOutput()
+		if pullErr != nil {
+			// REQ-UX-004: 풀 실패 시 로컬 Dockerfile에서 자동 빌드 시도
+			logger.Debug().Str("output", string(pullOutput)).Msg("이미지 풀 실패")
+			fmt.Println("  이미지 다운로드 실패. 로컬에서 빌드를 시도합니다...")
+
+			dockerfilePath := findDockerfileDir("chromium-sandbox")
+			if dockerfilePath != "" {
+				fmt.Printf("  빌드 중: %s (1~2분 소요)\n", dockerfilePath)
+				buildCmd := exec.Command(dockerPath, "build", "-t", imageName, dockerfilePath)
+				buildOutput, buildErr := buildCmd.CombinedOutput()
+				if buildErr != nil {
+					printError("이미지 빌드 실패")
+					printDockerBuildFailureGuide(string(buildOutput))
+				} else {
+					printSuccess(fmt.Sprintf("이미지 빌드 완료: %s", imageName))
+				}
+			} else {
+				fmt.Println("  ! Dockerfile을 찾을 수 없습니다")
+				fmt.Println("    수동 빌드 방법:")
+				fmt.Println("    1. autopus-bridge 소스 디렉토리로 이동")
+				fmt.Println("    2. docker build -t autopus/chromium-sandbox:latest docker/chromium-sandbox/")
+				fmt.Println()
+				fmt.Println("  Computer Use 없이 계속 진행합니다.")
+			}
 		} else {
 			printSuccess(fmt.Sprintf("이미지 준비 완료: %s", imageName))
 		}
@@ -715,6 +893,34 @@ func stepInstallMissingTools(tools []businessTool, scanner *bufio.Scanner) {
 		if !ok {
 			fmt.Printf("  ! %-14s %s 자동 설치 미지원\n", t.Name, osName)
 			continue
+		}
+
+		// REQ-UX-003: pipx 명령이 필요한데 미설치인 경우 자동 설치
+		if strings.HasPrefix(installCmd, "pipx ") {
+			if _, pipxErr := exec.LookPath("pipx"); pipxErr != nil {
+				fmt.Println("  pipx가 설치되어 있지 않습니다. 먼저 설치합니다...")
+				var pipxInstalled bool
+				switch osName {
+				case "darwin":
+					if _, brewErr := exec.LookPath("brew"); brewErr == nil {
+						if brewInstallErr := runInstallCommand("brew install pipx"); brewInstallErr == nil {
+							_ = runInstallCommand("pipx ensurepath")
+							pipxInstalled = true
+							printSuccess("pipx 설치 완료")
+						}
+					}
+				case "linux":
+					if aptErr := runInstallCommand("sudo apt-get install -y pipx"); aptErr == nil {
+						_ = runInstallCommand("pipx ensurepath")
+						pipxInstalled = true
+						printSuccess("pipx 설치 완료")
+					}
+				}
+				if !pipxInstalled {
+					printError(fmt.Sprintf("pipx 설치 실패. %s 설치를 건너뜁니다", t.Name))
+					continue
+				}
+			}
 		}
 
 		fmt.Printf("  설치 중: %s\n", installCmd)
@@ -1396,6 +1602,13 @@ func printFixSuggestion(stepName string, err error) {
 	case "config":
 		fmt.Println("    1. ~/.config/autopus/ 디렉토리 쓰기 권한을 확인하세요")
 		fmt.Println("    2. 'autopus-bridge setup'으로 수동 설정을 시도하세요")
+	case "connection":
+		fmt.Println("    서버 연결에 실패했습니다.")
+		fmt.Println()
+		fmt.Println("    다음을 확인해 주세요:")
+		fmt.Println("    1. 인터넷에 연결되어 있는지 확인하세요")
+		fmt.Println("    2. 'autopus-bridge up --force'로 처음부터 다시 시도하세요")
+		fmt.Println("    3. 문제가 지속되면 'autopus-bridge up -v'로 상세 로그를 확인하세요")
 	default:
 		fmt.Println("    1. 'autopus-bridge up --force'로 처음부터 다시 시도하세요")
 		fmt.Println("    2. 문제가 지속되면 'autopus-bridge up -v'로 상세 로그를 확인하세요")
