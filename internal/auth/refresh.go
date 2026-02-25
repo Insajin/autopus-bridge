@@ -67,6 +67,10 @@ func RefreshAccessToken(creds *Credentials) error {
 	creds.AccessToken = refreshResp.Data.AccessToken
 	creds.RefreshToken = refreshResp.Data.RefreshToken
 	creds.ExpiresAt = time.Now().Add(time.Duration(refreshResp.Data.ExpiresIn) * time.Second)
+	// JWT exp 클레임이 있으면 정확한 만료 시간 사용 (ExpiresIn은 refresh token 수명일 수 있음)
+	if jwtExpiry, err := ParseJWTExpiry(creds.AccessToken); err == nil {
+		creds.ExpiresAt = jwtExpiry
+	}
 
 	// 파일에 저장
 	if err := Save(creds); err != nil {

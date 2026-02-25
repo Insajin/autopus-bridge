@@ -92,6 +92,15 @@ func (r *TokenRefresher) nextRefreshDuration() time.Duration {
 	defer r.mu.RUnlock()
 
 	timeUntilExpiry := time.Until(r.creds.ExpiresAt)
+
+	// 안전장치: JWT exp 클레임도 확인하여 더 짧은 쪽 사용
+	if jwtExpiry, err := ParseJWTExpiry(r.creds.AccessToken); err == nil {
+		jwtTimeUntil := time.Until(jwtExpiry)
+		if jwtTimeUntil < timeUntilExpiry {
+			timeUntilExpiry = jwtTimeUntil
+		}
+	}
+
 	refreshAt := timeUntilExpiry - refreshBeforeExpiry
 
 	if refreshAt < minRefreshInterval {
@@ -106,7 +115,17 @@ func (r *TokenRefresher) refreshToken() {
 	defer r.mu.Unlock()
 
 	// 이미 유효하고 만료까지 충분한 시간이 남아있으면 스킵
-	if time.Until(r.creds.ExpiresAt) > refreshBeforeExpiry {
+	timeUntilExpiry := time.Until(r.creds.ExpiresAt)
+
+	// 안전장치: JWT exp 클레임도 확인하여 더 짧은 쪽 사용
+	if jwtExpiry, err := ParseJWTExpiry(r.creds.AccessToken); err == nil {
+		jwtTimeUntil := time.Until(jwtExpiry)
+		if jwtTimeUntil < timeUntilExpiry {
+			timeUntilExpiry = jwtTimeUntil
+		}
+	}
+
+	if timeUntilExpiry > refreshBeforeExpiry {
 		return
 	}
 

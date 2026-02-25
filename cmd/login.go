@@ -182,6 +182,10 @@ func performDeviceCodeLogin(cmd *cobra.Command) error {
 
 	// Step 5: 인증 정보 저장
 	tokenExpiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	// JWT exp 클레임이 있으면 정확한 만료 시간 사용
+	if jwtExpiry, err := auth.ParseJWTExpiry(tokenResp.AccessToken); err == nil {
+		tokenExpiresAt = jwtExpiry
+	}
 
 	creds := &auth.Credentials{
 		AccessToken:   tokenResp.AccessToken,
