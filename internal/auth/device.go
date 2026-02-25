@@ -1,6 +1,7 @@
 // device.go는 RFC 8628 Device Authorization Flow 클라이언트를 구현합니다.
 // POST /api/v1/auth/device/code 로 디바이스 코드를 요청하고,
 // POST /api/v1/auth/device/token 을 폴링하여 토큰을 수신합니다.
+// RFC 7636 PKCE 확장을 지원합니다.
 package auth
 
 import (
@@ -12,6 +13,25 @@ import (
 	"time"
 )
 
+// BridgeVersion은 X-Bridge-Version 헤더에 사용되는 CLI 버전 문자열입니다.
+// cmd 패키지의 SetVersionInfo에서 설정됩니다.
+var BridgeVersion string
+
+// TokenUser는 토큰 응답에 포함되는 사용자 정보입니다.
+type TokenUser struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+}
+
+// TokenWorkspace는 토큰 응답에 포함되는 워크스페이스 정보입니다.
+type TokenWorkspace struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"`
+	Role string `json:"role"`
+}
+
 // DeviceCodeResponse는 디바이스 코드 요청 응답 구조체입니다.
 // POST /api/v1/auth/device/code 에서 반환됩니다.
 type DeviceCodeResponse struct {
@@ -21,6 +41,7 @@ type DeviceCodeResponse struct {
 	VerificationURIComplete string `json:"verification_uri_complete"`
 	ExpiresIn               int    `json:"expires_in"`
 	Interval                int    `json:"interval"`
+	CodeChallengeSupported  bool   `json:"code_challenge_supported,omitempty"`
 }
 
 // DeviceTokenResponse는 디바이스 토큰 폴링 응답 구조체입니다.
@@ -35,6 +56,9 @@ type DeviceTokenResponse struct {
 	UserEmail     string `json:"user_email,omitempty"`
 	WorkspaceID   string `json:"workspace_id,omitempty"`
 	WorkspaceSlug string `json:"workspace_slug,omitempty"`
+	// 확장 필드: 사용자 및 워크스페이스 목록
+	User       *TokenUser       `json:"user,omitempty"`
+	Workspaces []TokenWorkspace `json:"workspaces,omitempty"`
 }
 
 const (
@@ -46,13 +70,40 @@ const (
 	slowDownIncrement = 5
 )
 
+// setBridgeHeaders는 HTTP 요청에 공통 헤더를 설정합니다.
+func setBridgeHeaders(req *http.Request) {
+	req.Header.Set("Content-Type", "application/json")
+	if BridgeVersion != "" {
+		req.Header.Set("X-Bridge-Version", BridgeVersion)
+	}
+}
+
 // RequestDeviceCode는 디바이스 코드를 요청합니다.
 // apiBaseURL은 "http://127.0.0.1:8080" 또는 "https://api.autopus.co" 형식입니다.
-func RequestDeviceCode(apiBaseURL string) (*DeviceCodeResponse, error) {
+// pkce가 nil이 아니면 code_challenge와 code_challenge_method를 함께 전송합니다.
+func RequestDeviceCode(apiBaseURL string, pkce *PKCEPair) (*DeviceCodeResponse, error) {
 	url := apiBaseURL + "/api/v1/auth/device/code"
 
+	// 요청 바디 구성
+	reqBody := map[string]string{}
+	if pkce != nil {
+		reqBody["code_challenge"] = pkce.CodeChallenge
+		reqBody["code_challenge_method"] = pkce.Method
+	}
+
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("요청 생성 실패: %w", err)
+	}
+
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return nil, fmt.Errorf("HTTP 요청 생성 실패: %w", err)
+	}
+	setBridgeHeaders(req)
+
 	client := &http.Client{Timeout: deviceHTTPTimeout}
-	resp, err := client.Post(url, "application/json", bytes.NewReader([]byte("{}")))
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("디바이스 코드 요청 실패: %w", err)
 	}
@@ -81,8 +132,9 @@ func RequestDeviceCode(apiBaseURL string) (*DeviceCodeResponse, error) {
 
 // PollDeviceToken은 디바이스 토큰 엔드포인트를 폴링하여 인증 완료를 기다립니다.
 // 사용자가 브라우저에서 인증을 완료하면 토큰을 반환합니다.
+// codeVerifier가 비어있지 않으면 PKCE code_verifier를 함께 전송합니다.
 // ctx가 취소되면 폴링을 중단합니다.
-func PollDeviceToken(ctx context.Context, apiBaseURL, deviceCode string, interval int) (*DeviceTokenResponse, error) {
+func PollDeviceToken(ctx context.Context, apiBaseURL, deviceCode string, interval int, codeVerifier string) (*DeviceTokenResponse, error) {
 	url := apiBaseURL + "/api/v1/auth/device/token"
 	client := &http.Client{Timeout: deviceHTTPTimeout}
 
@@ -90,12 +142,18 @@ func PollDeviceToken(ctx context.Context, apiBaseURL, deviceCode string, interva
 		interval = defaultPollInterval
 	}
 
-	reqBody := struct {
-		DeviceCode string `json:"device_code"`
-		GrantType  string `json:"grant_type"`
-	}{
+	type pollRequest struct {
+		DeviceCode   string `json:"device_code"`
+		GrantType    string `json:"grant_type"`
+		CodeVerifier string `json:"code_verifier,omitempty"`
+	}
+
+	reqBody := pollRequest{
 		DeviceCode: deviceCode,
 		GrantType:  "urn:ietf:params:oauth:grant-type:device_code",
+	}
+	if codeVerifier != "" {
+		reqBody.CodeVerifier = codeVerifier
 	}
 
 	for {
@@ -109,7 +167,13 @@ func PollDeviceToken(ctx context.Context, apiBaseURL, deviceCode string, interva
 				return nil, fmt.Errorf("요청 생성 실패: %w", err)
 			}
 
-			resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+			req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+			if err != nil {
+				continue
+			}
+			setBridgeHeaders(req)
+
+			resp, err := client.Do(req)
 			if err != nil {
 				// 네트워크 오류 시 폴링 계속
 				continue

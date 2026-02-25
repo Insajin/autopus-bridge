@@ -21,6 +21,7 @@ type Credentials struct {
 	UserEmail     string    `json:"user_email,omitempty"`
 	WorkspaceID   string    `json:"workspace_id,omitempty"`
 	WorkspaceSlug string    `json:"workspace_slug,omitempty"`
+	WorkspaceName string    `json:"workspace_name,omitempty"`
 }
 
 // IsExpired checks if the access token has expired.

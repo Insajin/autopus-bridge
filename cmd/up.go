@@ -310,17 +310,10 @@ func isAuthError(err error) bool {
 // Step Implementations
 // ─────────────────────────────────────────────────────────────────────────────
 
-// performBrowserAuthWithFallback attempts browser-based authentication first,
-// then falls back to device code flow if browser auth fails.
+// performBrowserAuthWithFallback은 Device Code Flow로 인증합니다.
+// 하위 호환성을 위해 함수명을 유지합니다.
 func performBrowserAuthWithFallback() (*auth.Credentials, error) {
-	newCreds, err := performBrowserAuthFlowStandalone()
-	if err != nil {
-		logger.Warn().Err(err).Msg("브라우저 인증 실패, Device Code 방식으로 전환")
-		fmt.Println("  브라우저 인증에 실패했습니다. Device Code 방식으로 전환합니다...")
-		fmt.Println()
-		return performDeviceAuthFlow()
-	}
-	return newCreds, nil
+	return performDeviceAuthFlow()
 }
 
 // stepAuthCheck loads existing credentials or triggers browser auth flow.
@@ -470,6 +463,7 @@ func stepWorkspaceSelection(creds *auth.Credentials, scanner *bufio.Scanner) err
 	// Update credentials with workspace info
 	creds.WorkspaceID = selected.ID
 	creds.WorkspaceSlug = selected.Slug
+	creds.WorkspaceName = selected.Name
 
 	if err := auth.Save(creds); err != nil {
 		return fmt.Errorf("인증 정보 업데이트 실패: %w", err)
@@ -1454,24 +1448,30 @@ func stepAIToolMCPConfig(providers []providerInfo, scanner *bufio.Scanner) {
 // Device Auth Flow (reused from login.go logic, non-duplicated)
 // ─────────────────────────────────────────────────────────────────────────────
 
-// performDeviceAuthFlow runs the complete Device Authorization Flow and returns credentials.
+// performDeviceAuthFlow runs the complete Device Authorization Flow with PKCE and returns credentials.
 func performDeviceAuthFlow() (*auth.Credentials, error) {
 	apiBaseURL := getAPIBaseURL()
 
-	// Step 1: Request device code
-	deviceResp, err := auth.RequestDeviceCode(apiBaseURL)
+	// Step 1: PKCE 키 쌍 생성
+	pkce, err := auth.GeneratePKCE()
+	if err != nil {
+		return nil, fmt.Errorf("PKCE 생성 실패: %w", err)
+	}
+
+	// Step 2: Request device code (PKCE code_challenge 포함)
+	deviceResp, err := auth.RequestDeviceCode(apiBaseURL, pkce)
 	if err != nil {
 		return nil, fmt.Errorf("디바이스 코드 요청 실패: %w", err)
 	}
 
-	// Step 2: Display auth code
+	// Step 3: Display auth code
 	fmt.Printf("  인증 코드: %s\n", deviceResp.UserCode)
 	fmt.Println()
 	fmt.Printf("  다음 URL에서 위 코드를 입력하세요:\n")
 	fmt.Printf("  %s\n", deviceResp.VerificationURI)
 	fmt.Println()
 
-	// Step 3: Open browser
+	// Step 4: Open browser
 	openURL := deviceResp.VerificationURIComplete
 	if openURL == "" {
 		openURL = deviceResp.VerificationURI
@@ -1480,34 +1480,15 @@ func performDeviceAuthFlow() (*auth.Credentials, error) {
 		fmt.Printf("  브라우저에서 직접 위 URL을 열어주세요.\n\n")
 	}
 
-	// Step 4: Poll for token
+	// Step 5: Poll for token (PKCE code_verifier 포함)
 	ctx, cancel := context.WithTimeout(context.Background(), loginTimeout)
 	defer cancel()
 
 	expiresAt := time.Now().Add(time.Duration(deviceResp.ExpiresIn) * time.Second)
-
-	// Spinner goroutine for progress indication
 	stopSpinner := make(chan struct{})
-	go func() {
-		ticker := time.NewTicker(1 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-stopSpinner:
-				return
-			case <-ticker.C:
-				remaining := time.Until(expiresAt).Truncate(time.Second)
-				if remaining < 0 {
-					remaining = 0
-				}
-				minutes := int(remaining.Minutes())
-				seconds := int(remaining.Seconds()) % 60
-				fmt.Printf("\r  인증 대기 중... (남은 시간: %d분 %02d초)  ", minutes, seconds)
-			}
-		}
-	}()
+	go spinnerLoop(stopSpinner, expiresAt)
 
-	tokenResp, err := auth.PollDeviceToken(ctx, apiBaseURL, deviceResp.DeviceCode, deviceResp.Interval)
+	tokenResp, err := auth.PollDeviceToken(ctx, apiBaseURL, deviceResp.DeviceCode, deviceResp.Interval, pkce.CodeVerifier)
 	close(stopSpinner)
 	fmt.Printf("\r%s\r", strings.Repeat(" ", 50))
 
@@ -1515,8 +1496,11 @@ func performDeviceAuthFlow() (*auth.Credentials, error) {
 		return nil, fmt.Errorf("인증 실패: %w", err)
 	}
 
-	// Step 5: Save credentials
+	// Step 6: Save credentials
 	tokenExpiresAt := time.Now().Add(time.Duration(tokenResp.ExpiresIn) * time.Second)
+	if jwtExpiry, parseErr := auth.ParseJWTExpiry(tokenResp.AccessToken); parseErr == nil {
+		tokenExpiresAt = jwtExpiry
+	}
 
 	creds := &auth.Credentials{
 		AccessToken:   tokenResp.AccessToken,
@@ -1526,6 +1510,13 @@ func performDeviceAuthFlow() (*auth.Credentials, error) {
 		UserEmail:     tokenResp.UserEmail,
 		WorkspaceID:   tokenResp.WorkspaceID,
 		WorkspaceSlug: tokenResp.WorkspaceSlug,
+	}
+
+	// 워크스페이스 자동 선택 (1개일 경우)
+	if creds.WorkspaceID == "" && len(tokenResp.Workspaces) == 1 {
+		creds.WorkspaceID = tokenResp.Workspaces[0].ID
+		creds.WorkspaceSlug = tokenResp.Workspaces[0].Slug
+		creds.WorkspaceName = tokenResp.Workspaces[0].Name
 	}
 
 	if saveErr := auth.Save(creds); saveErr != nil {

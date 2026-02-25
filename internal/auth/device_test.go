@@ -31,7 +31,7 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := RequestDeviceCode(server.URL)
+	resp, err := RequestDeviceCode(server.URL, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -53,13 +53,88 @@ func TestRequestDeviceCode_Success(t *testing.T) {
 	}
 }
 
+func TestRequestDeviceCode_WithPKCE(t *testing.T) {
+	var receivedChallenge, receivedMethod string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		receivedChallenge = body["code_challenge"]
+		receivedMethod = body["code_challenge_method"]
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(DeviceCodeResponse{
+			DeviceCode:             "test-device-code",
+			UserCode:               "PKCE-TEST",
+			VerificationURI:        "https://autopus.co/device",
+			ExpiresIn:              600,
+			Interval:               5,
+			CodeChallengeSupported: true,
+		})
+	}))
+	defer server.Close()
+
+	pkce, err := GeneratePKCE()
+	if err != nil {
+		t.Fatalf("GeneratePKCE failed: %v", err)
+	}
+
+	resp, err := RequestDeviceCode(server.URL, pkce)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedChallenge != pkce.CodeChallenge {
+		t.Errorf("expected code_challenge '%s', got '%s'", pkce.CodeChallenge, receivedChallenge)
+	}
+	if receivedMethod != "S256" {
+		t.Errorf("expected code_challenge_method 'S256', got '%s'", receivedMethod)
+	}
+	if resp.UserCode != "PKCE-TEST" {
+		t.Errorf("expected user_code 'PKCE-TEST', got '%s'", resp.UserCode)
+	}
+}
+
+func TestRequestDeviceCode_BridgeVersionHeader(t *testing.T) {
+	originalVersion := BridgeVersion
+	defer func() { BridgeVersion = originalVersion }()
+
+	BridgeVersion = "1.2.3"
+
+	var receivedVersion string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedVersion = r.Header.Get("X-Bridge-Version")
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(DeviceCodeResponse{
+			DeviceCode:      "test-code",
+			UserCode:        "TEST-CODE",
+			VerificationURI: "https://autopus.co/device",
+			ExpiresIn:       600,
+			Interval:        5,
+		})
+	}))
+	defer server.Close()
+
+	_, err := RequestDeviceCode(server.URL, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedVersion != "1.2.3" {
+		t.Errorf("expected X-Bridge-Version '1.2.3', got '%s'", receivedVersion)
+	}
+}
+
 func TestRequestDeviceCode_ServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer server.Close()
 
-	_, err := RequestDeviceCode(server.URL)
+	_, err := RequestDeviceCode(server.URL, nil)
 	if err == nil {
 		t.Fatal("expected error for server error response")
 	}
@@ -75,7 +150,7 @@ func TestRequestDeviceCode_EmptyDeviceCode(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := RequestDeviceCode(server.URL)
+	_, err := RequestDeviceCode(server.URL, nil)
 	if err == nil {
 		t.Fatal("expected error for empty device code")
 	}
@@ -93,7 +168,7 @@ func TestRequestDeviceCode_DefaultInterval(t *testing.T) {
 	}))
 	defer server.Close()
 
-	resp, err := RequestDeviceCode(server.URL)
+	resp, err := RequestDeviceCode(server.URL, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -135,7 +210,7 @@ func TestPollDeviceToken_Success(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	resp, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1)
+	resp, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -151,6 +226,84 @@ func TestPollDeviceToken_Success(t *testing.T) {
 	}
 }
 
+func TestPollDeviceToken_WithCodeVerifier(t *testing.T) {
+	var receivedVerifier string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			DeviceCode   string `json:"device_code"`
+			GrantType    string `json:"grant_type"`
+			CodeVerifier string `json:"code_verifier"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("failed to decode request body: %v", err)
+		}
+		receivedVerifier = body.CodeVerifier
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(DeviceTokenResponse{
+			AccessToken: "ok",
+			ExpiresIn:   3600,
+		})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "my-code-verifier")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if receivedVerifier != "my-code-verifier" {
+		t.Errorf("expected code_verifier 'my-code-verifier', got '%s'", receivedVerifier)
+	}
+}
+
+func TestPollDeviceToken_WithWorkspaces(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(DeviceTokenResponse{
+			AccessToken:  "test-token",
+			RefreshToken: "test-refresh",
+			ExpiresIn:    3600,
+			UserEmail:    "user@example.com",
+			User: &TokenUser{
+				ID:          "user-123",
+				Email:       "user@example.com",
+				DisplayName: "Test User",
+			},
+			Workspaces: []TokenWorkspace{
+				{ID: "ws-1", Name: "My Workspace", Slug: "my-workspace", Role: "owner"},
+				{ID: "ws-2", Name: "Team Workspace", Slug: "team-workspace", Role: "member"},
+			},
+		})
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.User == nil {
+		t.Fatal("expected User to be non-nil")
+	}
+	if resp.User.ID != "user-123" {
+		t.Errorf("expected user ID 'user-123', got '%s'", resp.User.ID)
+	}
+	if len(resp.Workspaces) != 2 {
+		t.Fatalf("expected 2 workspaces, got %d", len(resp.Workspaces))
+	}
+	if resp.Workspaces[0].Slug != "my-workspace" {
+		t.Errorf("expected first workspace slug 'my-workspace', got '%s'", resp.Workspaces[0].Slug)
+	}
+}
+
 func TestPollDeviceToken_ExpiredToken(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -163,7 +316,7 @@ func TestPollDeviceToken_ExpiredToken(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1)
+	_, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "")
 	if err == nil {
 		t.Fatal("expected error for expired token")
 	}
@@ -184,7 +337,7 @@ func TestPollDeviceToken_AccessDenied(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1)
+	_, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "")
 	if err == nil {
 		t.Fatal("expected error for access denied")
 	}
@@ -217,7 +370,7 @@ func TestPollDeviceToken_SlowDown(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	resp, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1)
+	resp, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -240,7 +393,7 @@ func TestPollDeviceToken_ContextCancelled(t *testing.T) {
 	// 즉시 취소
 	cancel()
 
-	_, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1)
+	_, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "")
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
@@ -274,7 +427,7 @@ func TestPollDeviceToken_RequestBody(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	_, err := PollDeviceToken(ctx, server.URL, "my-device-code", 1)
+	_, err := PollDeviceToken(ctx, server.URL, "my-device-code", 1, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/config"
 	"github.com/insajin/autopus-bridge/internal/logger"
 	"github.com/spf13/cobra"
@@ -48,6 +49,8 @@ func SetVersionInfo(version, commit, buildDate string) {
 	appVersion = version
 	appCommit = commit
 	appBuildDate = buildDate
+	// auth 패키지에 버전 정보 전달 (X-Bridge-Version 헤더용)
+	auth.BridgeVersion = version
 }
 
 // GetVersionInfo는 버전 정보를 반환합니다.
