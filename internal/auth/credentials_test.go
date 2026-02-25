@@ -568,6 +568,164 @@ func TestParseJWTExpiry_ExpiredToken(t *testing.T) {
 	}
 }
 
+// TestSave_WorkspaceFields_AC022는 credentials.json에 workspace_id, workspace_slug,
+// workspace_name 필드가 올바르게 저장되고 로드되는지 검증합니다.
+// AC-022: 워크스페이스 정보가 credentials에 정상적으로 영속화되어야 합니다.
+func TestSave_WorkspaceFields_AC022(t *testing.T) {
+	tests := []struct {
+		name          string
+		workspaceID   string
+		workspaceSlug string
+		workspaceName string
+	}{
+		{
+			name:          "모든 워크스페이스 필드가 설정된 경우",
+			workspaceID:   "ws-abc-123",
+			workspaceSlug: "my-workspace",
+			workspaceName: "My Workspace",
+		},
+		{
+			name:          "워크스페이스 필드가 비어있는 경우",
+			workspaceID:   "",
+			workspaceSlug: "",
+			workspaceName: "",
+		},
+		{
+			name:          "한국어 워크스페이스 이름",
+			workspaceID:   "ws-kr-001",
+			workspaceSlug: "dev-team",
+			workspaceName: "개발팀 워크스페이스",
+		},
+		{
+			name:          "특수문자가 포함된 slug",
+			workspaceID:   "ws-special-456",
+			workspaceSlug: "team-alpha-2024",
+			workspaceName: "Team Alpha (2024)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpDir := setupTestEnv(t)
+
+			creds := &Credentials{
+				AccessToken:   "test-access-token",
+				RefreshToken:  "test-refresh-token",
+				ExpiresAt:     time.Now().Add(1 * time.Hour).Truncate(time.Millisecond),
+				ServerURL:     "https://example.com",
+				UserEmail:     "test@example.com",
+				WorkspaceID:   tt.workspaceID,
+				WorkspaceSlug: tt.workspaceSlug,
+				WorkspaceName: tt.workspaceName,
+			}
+
+			// 저장
+			if err := Save(creds); err != nil {
+				t.Fatalf("Save() error = %v", err)
+			}
+
+			// 파일에서 직접 JSON을 읽어 필드 존재 여부 확인
+			filePath := filepath.Join(tmpDir, "autopus", "credentials.json")
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				t.Fatalf("credentials.json 읽기 실패: %v", err)
+			}
+
+			// JSON 구조체로 파싱하여 각 필드 검증
+			var raw map[string]interface{}
+			if err := json.Unmarshal(data, &raw); err != nil {
+				t.Fatalf("JSON 파싱 실패: %v", err)
+			}
+
+			// 워크스페이스 필드가 비어있을 때는 omitempty에 의해 JSON에서 제외될 수 있음
+			if tt.workspaceID != "" {
+				if v, ok := raw["workspace_id"]; !ok {
+					t.Error("JSON에 workspace_id 필드가 없습니다")
+				} else if v != tt.workspaceID {
+					t.Errorf("workspace_id = %q, want %q", v, tt.workspaceID)
+				}
+			}
+			if tt.workspaceSlug != "" {
+				if v, ok := raw["workspace_slug"]; !ok {
+					t.Error("JSON에 workspace_slug 필드가 없습니다")
+				} else if v != tt.workspaceSlug {
+					t.Errorf("workspace_slug = %q, want %q", v, tt.workspaceSlug)
+				}
+			}
+			if tt.workspaceName != "" {
+				if v, ok := raw["workspace_name"]; !ok {
+					t.Error("JSON에 workspace_name 필드가 없습니다")
+				} else if v != tt.workspaceName {
+					t.Errorf("workspace_name = %q, want %q", v, tt.workspaceName)
+				}
+			}
+
+			// Load를 통한 왕복 검증
+			loaded, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if loaded == nil {
+				t.Fatal("Load() returned nil")
+			}
+
+			if loaded.WorkspaceID != tt.workspaceID {
+				t.Errorf("로드된 WorkspaceID = %q, want %q", loaded.WorkspaceID, tt.workspaceID)
+			}
+			if loaded.WorkspaceSlug != tt.workspaceSlug {
+				t.Errorf("로드된 WorkspaceSlug = %q, want %q", loaded.WorkspaceSlug, tt.workspaceSlug)
+			}
+			if loaded.WorkspaceName != tt.workspaceName {
+				t.Errorf("로드된 WorkspaceName = %q, want %q", loaded.WorkspaceName, tt.workspaceName)
+			}
+		})
+	}
+}
+
+// TestMaskToken은 토큰 마스킹이 올바르게 동작하는지 테스트합니다.
+func TestMaskToken(t *testing.T) {
+	tests := []struct {
+		name     string
+		token    string
+		expected string
+	}{
+		{
+			name:     "8자 이하 토큰은 완전 마스킹",
+			token:    "short",
+			expected: "***",
+		},
+		{
+			name:     "정확히 8자 토큰은 완전 마스킹",
+			token:    "12345678",
+			expected: "***",
+		},
+		{
+			name:     "빈 토큰은 완전 마스킹",
+			token:    "",
+			expected: "***",
+		},
+		{
+			name:     "9자 이상 토큰은 처음 8자 + ...",
+			token:    "123456789",
+			expected: "12345678...",
+		},
+		{
+			name:     "긴 토큰",
+			token:    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.payload.sig",
+			expected: "eyJhbGci...",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MaskToken(tt.token)
+			if got != tt.expected {
+				t.Errorf("MaskToken(%q) = %q, want %q", tt.token, got, tt.expected)
+			}
+		})
+	}
+}
+
 // TestExpiresAtFromJWT는 Credentials 구조체의 ExpiresAtFromJWT 메서드를 테스트합니다.
 func TestExpiresAtFromJWT(t *testing.T) {
 	expTimestamp := int64(1735689600)
