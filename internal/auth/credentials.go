@@ -3,10 +3,12 @@
 package auth
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -30,6 +32,63 @@ func (c *Credentials) IsExpired() bool {
 // IsValid checks if credentials are valid (non-empty and not expired).
 func (c *Credentials) IsValid() bool {
 	return c.AccessToken != "" && !c.IsExpired()
+}
+
+// ParseJWTExpiry JWT 토큰에서 exp 클레임을 추출하여 만료 시간을 파싱합니다.
+// JWT 서명을 검증하지 않고 exp 클레임만 추출합니다 (서명 검증은 서버의 책임).
+// 만료 시간을 기준으로 토큰 새로고침을 스케줄링하기 위한 용도입니다.
+func ParseJWTExpiry(token string) (time.Time, error) {
+	// JWT는 header.payload.signature 형식이므로 '.'으로 분리
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		return time.Time{}, fmt.Errorf("유효하지 않은 JWT 형식: %d개 부분 (예상: 3개)", len(parts))
+	}
+
+	// payload는 두 번째 부분
+	payload := parts[1]
+
+	// base64url 디코딩 (패딩 추가)
+	// base64url은 '-'과 '_'를 사용하고 패딩을 생략하므로 복구 필요
+	padded := payload
+	switch len(payload) % 4 {
+	case 1:
+		padded += "==="
+	case 2:
+		padded += "=="
+	case 3:
+		padded += "="
+	}
+
+	decoded, err := base64.URLEncoding.DecodeString(padded)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("JWT payload base64 디코딩 실패: %w", err)
+	}
+
+	// JSON 파싱하여 exp 클레임 추출
+	var claims map[string]interface{}
+	if err := json.Unmarshal(decoded, &claims); err != nil {
+		return time.Time{}, fmt.Errorf("JWT payload JSON 파싱 실패: %w", err)
+	}
+
+	// exp 클레임 확인
+	expValue, ok := claims["exp"]
+	if !ok {
+		return time.Time{}, fmt.Errorf("JWT payload에 exp 클레임이 없습니다")
+	}
+
+	// exp는 Unix 타임스탐프 (정수)
+	expFloat, ok := expValue.(float64)
+	if !ok {
+		return time.Time{}, fmt.Errorf("JWT exp 클레임이 숫자가 아닙니다: %T", expValue)
+	}
+
+	// Unix 타임스탬프를 time.Time으로 변환
+	return time.Unix(int64(expFloat), 0), nil
+}
+
+// ExpiresAtFromJWT JWT 토큰에서 exp 클레임을 기반으로 만료 시간을 반환합니다.
+func (c *Credentials) ExpiresAtFromJWT() (time.Time, error) {
+	return ParseJWTExpiry(c.AccessToken)
 }
 
 // credentialsDir returns the directory for storing credentials.

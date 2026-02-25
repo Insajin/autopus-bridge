@@ -393,8 +393,15 @@ func startCallbackServer(port int, expectedState string, resultCh chan<- *auth.C
 </body>
 </html>`))
 
-		// Credentials 생성
+		// JWT exp 클레임에서 실제 만료 시간 추출 (프론트엔드의 expires_in보다 신뢰할 수 있음)
 		tokenExpiresAt := time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second)
+		if jwtExpiry, err := auth.ParseJWTExpiry(resp.AccessToken); err == nil {
+			tokenExpiresAt = jwtExpiry
+			logger.Debug().Time("jwt_exp", jwtExpiry).Msg("JWT exp 클레임 기반 만료 시간 설정")
+		} else {
+			logger.Warn().Err(err).Msg("JWT exp 파싱 실패, callback expires_in 사용")
+		}
+
 		creds := &auth.Credentials{
 			AccessToken:   resp.AccessToken,
 			RefreshToken:  resp.RefreshToken,

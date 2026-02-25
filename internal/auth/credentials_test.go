@@ -466,3 +466,126 @@ func TestClear_ThenLoad(t *testing.T) {
 		t.Errorf("Clear 후 Load() = %v, want nil", loaded)
 	}
 }
+
+// TestParseJWTExpiry_ValidJWT는 유효한 JWT에서 exp 클레임을 올바르게 추출하는지 테스트합니다.
+func TestParseJWTExpiry_ValidJWT(t *testing.T) {
+	// 유효한 JWT 토큰 (header.payload.signature)
+	// header: {"alg":"HS256","typ":"JWT"}
+	// payload: {"exp":1735689600,"sub":"user123"}
+	// signature: dummy
+	expTimestamp := int64(1735689600)
+	expectedTime := time.Unix(expTimestamp, 0)
+
+	// 실제 유효한 JWT 형식의 테스트 토큰
+	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MzU2ODk2MDB9.dummy"
+
+	expiry, err := ParseJWTExpiry(token)
+	if err != nil {
+		t.Fatalf("ParseJWTExpiry() error = %v, want nil", err)
+	}
+
+	if !expiry.Equal(expectedTime) {
+		t.Errorf("ParseJWTExpiry() = %v, want %v", expiry, expectedTime)
+	}
+}
+
+// TestParseJWTExpiry_InvalidFormat는 유효하지 않은 JWT 형식 처리를 테스트합니다.
+func TestParseJWTExpiry_InvalidFormat(t *testing.T) {
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{"2개 부분만 있는 토큰", "header.payload"},
+		{"1개 부분만 있는 토큰", "header"},
+		{"4개 부분이 있는 토큰", "head.er.payl.oad"},
+		{"빈 토큰", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseJWTExpiry(tt.token)
+			if err == nil {
+				t.Errorf("ParseJWTExpiry() error = nil, want error for %q", tt.token)
+			}
+		})
+	}
+}
+
+// TestParseJWTExpiry_InvalidBase64는 유효하지 않은 base64 payload 처리를 테스트합니다.
+func TestParseJWTExpiry_InvalidBase64(t *testing.T) {
+	// header.invalid_base64_payload.signature
+	// invalid_base64_payload는 유효한 base64가 아님
+	token := "header.!!!invalid!!!.signature"
+
+	_, err := ParseJWTExpiry(token)
+	if err == nil {
+		t.Error("ParseJWTExpiry() error = nil, want error for invalid base64")
+	}
+}
+
+// TestParseJWTExpiry_MissingExpClaim는 exp 클레임이 없는 경우를 테스트합니다.
+func TestParseJWTExpiry_MissingExpClaim(t *testing.T) {
+	// payload: {"sub":"user123"} (exp 클레임 없음)
+	// base64url encoded payload: eyJzdWIiOiJ1c2VyMTIzIn0
+	token := "header.eyJzdWIiOiJ1c2VyMTIzIn0.signature"
+
+	_, err := ParseJWTExpiry(token)
+	if err == nil {
+		t.Error("ParseJWTExpiry() error = nil, want error for missing exp claim")
+	}
+}
+
+// TestParseJWTExpiry_InvalidExpType는 exp 클레임이 숫자가 아닌 경우를 테스트합니다.
+func TestParseJWTExpiry_InvalidExpType(t *testing.T) {
+	// payload: {"exp":"not-a-number"} (exp가 문자열)
+	// base64url encoded payload: eyJleHAiOiJub3QtYS1udW1iZXIifQ
+	token := "header.eyJleHAiOiJub3QtYS1udW1iZXIifQ.signature"
+
+	_, err := ParseJWTExpiry(token)
+	if err == nil {
+		t.Error("ParseJWTExpiry() error = nil, want error for invalid exp type")
+	}
+}
+
+// TestParseJWTExpiry_ExpiredToken는 만료된 JWT도 올바르게 파싱하는지 테스트합니다.
+// (시간 검증이 아니라 exp 클레임 추출만 수행하므로 만료된 토큰도 파싱 가능)
+func TestParseJWTExpiry_ExpiredToken(t *testing.T) {
+	// 과거 timestamp (2020년)
+	expTimestamp := int64(1577836800)
+	expectedTime := time.Unix(expTimestamp, 0)
+
+	// payload: {"exp":1577836800}
+	// base64url encoded: eyJleHAiOjE1Nzc4MzY4MDB9
+	token := "header.eyJleHAiOjE1Nzc4MzY4MDB9.signature"
+
+	expiry, err := ParseJWTExpiry(token)
+	if err != nil {
+		t.Fatalf("ParseJWTExpiry() error = %v, want nil (expired token should still parse)", err)
+	}
+
+	if !expiry.Equal(expectedTime) {
+		t.Errorf("ParseJWTExpiry() = %v, want %v", expiry, expectedTime)
+	}
+}
+
+// TestExpiresAtFromJWT는 Credentials 구조체의 ExpiresAtFromJWT 메서드를 테스트합니다.
+func TestExpiresAtFromJWT(t *testing.T) {
+	expTimestamp := int64(1735689600)
+	expectedTime := time.Unix(expTimestamp, 0)
+
+	// 유효한 JWT 형식의 테스트 토큰
+	token := "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3MzU2ODk2MDB9.dummy"
+
+	creds := &Credentials{
+		AccessToken: token,
+	}
+
+	expiry, err := creds.ExpiresAtFromJWT()
+	if err != nil {
+		t.Fatalf("ExpiresAtFromJWT() error = %v, want nil", err)
+	}
+
+	if !expiry.Equal(expectedTime) {
+		t.Errorf("ExpiresAtFromJWT() = %v, want %v", expiry, expectedTime)
+	}
+}
