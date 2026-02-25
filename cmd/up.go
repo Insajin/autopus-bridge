@@ -719,9 +719,21 @@ func printDockerBuildFailureGuide(buildOutput string) {
 }
 
 // findDockerfileDir는 지정된 이미지 이름에 해당하는 Dockerfile 디렉토리를 탐색한다.
-// 실행 파일 위치 기준 또는 알려진 경로에서 docker/<name>/Dockerfile을 찾는다.
+// 1. ~/.config/autopus/docker/<imageDirName>
+// 2. 실행 파일 위치 기준
+// 3. 현재 작업 디렉토리 기준
+// 순서로 탐색한다.
 func findDockerfileDir(imageDirName string) string {
-	// 1. 실행 파일 위치 기준 탐색
+	// 1. 홈 디렉토리 기반 캐시 경로 탐색
+	home, homeErr := os.UserHomeDir()
+	if homeErr == nil {
+		candidate := filepath.Join(home, ".config", "autopus", "docker", imageDirName)
+		if _, statErr := os.Stat(filepath.Join(candidate, "Dockerfile")); statErr == nil {
+			return candidate
+		}
+	}
+
+	// 2. 실행 파일 위치 기준 탐색
 	execPath, err := os.Executable()
 	if err == nil {
 		execDir := filepath.Dir(execPath)
@@ -738,7 +750,7 @@ func findDockerfileDir(imageDirName string) string {
 		}
 	}
 
-	// 2. 현재 작업 디렉토리 기준
+	// 3. 현재 작업 디렉토리 기준
 	cwd, cwdErr := os.Getwd()
 	if cwdErr == nil {
 		candidate := filepath.Join(cwd, "docker", imageDirName)
@@ -748,6 +760,31 @@ func findDockerfileDir(imageDirName string) string {
 	}
 
 	return ""
+}
+
+// cacheDockerfile는 빌드된 Dockerfile을 홈 디렉토리의 캐시 위치에 복사한다.
+// 향후 bridge 업데이트 후에도 Dockerfile을 찾을 수 있도록 한다.
+func cacheDockerfile(dockerfilePath string) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+
+	cacheDir := filepath.Join(home, ".config", "autopus", "docker", "chromium-sandbox")
+	if _, statErr := os.Stat(cacheDir); os.IsNotExist(statErr) {
+		if mkdirErr := os.MkdirAll(cacheDir, 0755); mkdirErr != nil {
+			return
+		}
+
+		srcDockerfile := filepath.Join(dockerfilePath, "Dockerfile")
+		srcData, readErr := os.ReadFile(srcDockerfile)
+		if readErr != nil {
+			return
+		}
+
+		dstDockerfile := filepath.Join(cacheDir, "Dockerfile")
+		_ = os.WriteFile(dstDockerfile, srcData, 0644)
+	}
 }
 
 // stepChromiumSandboxImage는 Chromium Sandbox Docker 이미지와 네트워크를 준비한다.
@@ -794,6 +831,8 @@ func stepChromiumSandboxImage() {
 					printDockerBuildFailureGuide(string(buildOutput))
 				} else {
 					printSuccess(fmt.Sprintf("이미지 빌드 완료: %s", imageName))
+					// 빌드 성공 후 Dockerfile을 캐시 디렉토리에 복사
+					cacheDockerfile(dockerfilePath)
 				}
 			} else {
 				fmt.Println("  ! Dockerfile을 찾을 수 없습니다")

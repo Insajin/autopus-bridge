@@ -180,8 +180,18 @@ func (p *ContainerPool) Release(ctx context.Context, sessionID string) error {
 
 // StartReplenisher는 워밍 풀을 유지하는 백그라운드 고루틴을 시작한다.
 // 컨텍스트가 취소되면 종료된다.
+// 연속 실패 시 지수 백오프를 적용한다:
+// - 0-2회 실패: 5초 간격
+// - 3-9회 실패: 60초 간격 (경고 로그)
+// - 10회 이상: 재시도 중단 (에러 로그)
 func (p *ContainerPool) StartReplenisher(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	interval := 5 * time.Second
+	consecutiveFailures := 0
+	const maxRetries = 10
+	const warningThreshold = 3
+	const longInterval = 60 * time.Second
+
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -189,17 +199,43 @@ func (p *ContainerPool) StartReplenisher(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			p.replenishWarmPool(ctx)
+			if consecutiveFailures >= maxRetries {
+				log.Printf("[computer-use] 워밍 풀 보충 중단: %d회 연속 실패. 이미지가 설치되어 있는지 확인하세요", consecutiveFailures)
+				return
+			}
+
+			if success := p.replenishWarmPool(ctx); !success {
+				consecutiveFailures++
+
+				if consecutiveFailures == warningThreshold {
+					log.Printf("[computer-use] 워밍 풀 보충 실패 %d회. Docker 이미지가 누락되었을 수 있습니다", consecutiveFailures)
+					// 긴 간격으로 전환
+					ticker.Stop()
+					ticker = time.NewTicker(longInterval)
+				} else if consecutiveFailures >= maxRetries {
+					log.Printf("[computer-use] 워밍 풀 보충 중단: %d회 연속 실패", consecutiveFailures)
+					return
+				}
+			} else {
+				consecutiveFailures = 0
+				// 성공 후 정상 간격으로 복구
+				if interval != 5*time.Second {
+					ticker.Stop()
+					ticker = time.NewTicker(5 * time.Second)
+					interval = 5 * time.Second
+				}
+			}
 		}
 	}
 }
 
 // replenishWarmPool은 유휴 워밍 컨테이너를 정리하고, 풀이 설정 크기보다 작으면 컨테이너를 추가한다.
-func (p *ContainerPool) replenishWarmPool(ctx context.Context) {
+// 성공 시 true, 컨테이너 생성 실패 시 false를 반환한다.
+func (p *ContainerPool) replenishWarmPool(ctx context.Context) bool {
 	p.mu.Lock()
 	if p.shutdown {
 		p.mu.Unlock()
-		return
+		return true
 	}
 
 	// 유휴 워밍 컨테이너 정리 (REQ-C2-04)
@@ -237,20 +273,20 @@ func (p *ContainerPool) replenishWarmPool(ctx context.Context) {
 
 	for i := 0; i < toCreate; i++ {
 		if ctx.Err() != nil {
-			return
+			return false
 		}
 
 		info, err := p.manager.Create(ctx)
 		if err != nil {
 			log.Printf("[computer-use] 워밍 풀 보충 실패: %v", err)
-			return
+			return false
 		}
 
 		p.mu.Lock()
 		if p.shutdown {
 			p.mu.Unlock()
 			_ = p.manager.Remove(ctx, info.ID)
-			return
+			return false
 		}
 		p.warmPool = append(p.warmPool, warmContainer{
 			info:      info,
@@ -260,6 +296,7 @@ func (p *ContainerPool) replenishWarmPool(ctx context.Context) {
 			info.ID[:min(12, len(info.ID))], len(p.warmPool), p.config.WarmPoolSize)
 		p.mu.Unlock()
 	}
+	return true
 }
 
 // Shutdown은 모든 컨테이너를 정리하고 풀을 종료한다.
