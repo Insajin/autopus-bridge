@@ -20,12 +20,14 @@ import (
 
 // providerInfo는 감지된 프로바이더 정보를 담는 구조체입니다.
 type providerInfo struct {
-	Name      string
-	CLIFound  bool
-	APIKeyEnv string // 감지된 API 키 환경변수 이름 (비어있으면 미감지)
-	CLIPath   string // CLI 바이너리 경로
-	HasCLI    bool
-	HasAPIKey bool
+	Name             string
+	CLIFound         bool
+	APIKeyEnv        string // 감지된 API 키 환경변수 이름 (비어있으면 미감지)
+	CLIPath          string // CLI 바이너리 경로
+	HasCLI           bool
+	HasAPIKey        bool
+	CLIAuthenticated bool // CLI 인증 완료 여부
+	ChatGPTAuth      bool // ChatGPT Plus/Pro 구독 인증 여부
 }
 
 // setupCmd는 초기 설정 마법사 명령어입니다.
@@ -363,6 +365,34 @@ type setupReconnConfig struct {
 	BackoffMultiplier float64 `yaml:"backoff_multiplier"`
 }
 
+// determineBestMode는 프로바이더의 인증 상태를 기반으로 최적 모드를 결정합니다.
+// 우선순위: app-server (Codex+ChatGPT) > hybrid (CLI인증+API키) > cli (CLI인증) > api (기본값)
+func determineBestMode(p providerInfo) string {
+	// Codex + ChatGPT 인증 -> app-server
+	if p.Name == "Codex" && p.ChatGPTAuth {
+		return "app-server"
+	}
+
+	// CLI 설치 + CLI 인증 + API 키 -> hybrid
+	if p.HasCLI && p.CLIAuthenticated && p.HasAPIKey {
+		return "hybrid"
+	}
+
+	// CLI 설치 + CLI 인증 (API 키 없음) -> cli
+	if p.HasCLI && p.CLIAuthenticated {
+		return "cli"
+	}
+
+	// CLI 설치 + CLI 미인증 + API 키 -> api (CLI는 인증 안 됐으므로 사용 불가)
+	// API 키만 있는 경우도 동일
+	if p.HasAPIKey {
+		return "api"
+	}
+
+	// 아무것도 없음 -> api (기본값)
+	return "api"
+}
+
 // writeSetupConfig는 설정을 YAML 파일로 저장합니다.
 func writeSetupConfig(configPath string, providers []providerInfo, serverURL, workDir string) error {
 	// 설정 디렉토리 생성 (0700 권한)
@@ -397,41 +427,27 @@ func writeSetupConfig(configPath string, providers []providerInfo, serverURL, wo
 		}
 	}
 
-	// Claude 모드 결정
+	// 프로바이더별 모드 결정 (determineBestMode 사용)
 	claudeMode := "api"
 	for _, p := range providers {
 		if p.Name == "Claude" {
-			if p.HasCLI && p.HasAPIKey {
-				claudeMode = "hybrid"
-			} else if p.HasCLI {
-				claudeMode = "cli"
-			}
+			claudeMode = determineBestMode(p)
 			break
 		}
 	}
 
-	// Gemini 모드 결정
 	geminiMode := "api"
 	for _, p := range providers {
 		if p.Name == "Gemini" {
-			if p.HasCLI && p.HasAPIKey {
-				geminiMode = "hybrid"
-			} else if p.HasCLI {
-				geminiMode = "cli"
-			}
+			geminiMode = determineBestMode(p)
 			break
 		}
 	}
 
-	// Codex 모드 결정
 	codexMode := "api"
 	for _, p := range providers {
 		if p.Name == "Codex" {
-			if p.HasCLI && p.HasAPIKey {
-				codexMode = "hybrid"
-			} else if p.HasCLI {
-				codexMode = "cli"
-			}
+			codexMode = determineBestMode(p)
 			break
 		}
 	}

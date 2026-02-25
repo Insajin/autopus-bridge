@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	totalUpSteps = 11
+	totalUpSteps = 12
 )
 
 // upProgress tracks the completion state of each step for resume capability.
@@ -58,17 +58,18 @@ var upCmd = &cobra.Command{
 	Long: `login, setup, connect를 통합한 스마트 명령입니다.
 
 실행 단계:
-  [1/11] 인증 확인
-  [2/11] 토큰 갱신
-  [3/11] 워크스페이스 선택
-  [4/11] AI Provider 감지 및 설치
-  [5/11] 비즈니스 도구 감지
-  [6/11] Docker 감지 및 설정
-  [7/11] Chromium Sandbox 이미지 준비
-  [8/11] 미설치 도구 설치
-  [9/11] AI 도구 MCP 설정
-  [10/11] 설정 파일 업데이트
-  [11/11] 서버 연결
+  [1/12] 인증 확인
+  [2/12] 토큰 갱신
+  [3/12] 워크스페이스 선택
+  [4/12] AI Provider 감지 및 설치
+  [5/12] AI 구독 인증 확인
+  [6/12] 비즈니스 도구 감지
+  [7/12] Docker 감지 및 설정
+  [8/12] Chromium Sandbox 이미지 준비
+  [9/12] 미설치 도구 설치
+  [10/12] AI 도구 MCP 설정
+  [11/12] 설정 파일 업데이트
+  [12/12] 서버 연결
 
 각 단계가 실패하면 구체적인 해결 방법을 안내합니다.
 재실행 시 완료된 단계는 자동으로 건너뜁니다.`,
@@ -188,51 +189,57 @@ func runUp(cmd *cobra.Command, args []string) error {
 	markStepCompleted(progress, 4)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 5: Business Tools Detection ──
-	printStep(5, totalUpSteps, "비즈니스 도구 감지 중...")
-	bizTools := detectBusinessTools()
-	printBusinessToolSummary(bizTools)
+	// ── Step 5: AI Subscription Auth Check ──
+	printStep(5, totalUpSteps, "AI 구독 인증 확인 중...")
+	providers = stepAISubscriptionAuth(providers, scanner)
 	markStepCompleted(progress, 5)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 6: Docker Detection ──
-	printStep(6, totalUpSteps, "Docker 감지 및 설정 중...")
-	stepDockerDetection(scanner)
+	// ── Step 6: Business Tools Detection ──
+	printStep(6, totalUpSteps, "비즈니스 도구 감지 중...")
+	bizTools := detectBusinessTools()
+	printBusinessToolSummary(bizTools)
 	markStepCompleted(progress, 6)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 7: Chromium Sandbox Image Preparation ──
-	printStep(7, totalUpSteps, "Chromium Sandbox 이미지 준비 중...")
-	stepChromiumSandboxImage()
+	// ── Step 7: Docker Detection ──
+	printStep(7, totalUpSteps, "Docker 감지 및 설정 중...")
+	stepDockerDetection(scanner)
 	markStepCompleted(progress, 7)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 8: Missing Tools Installation ──
-	printStep(8, totalUpSteps, "미설치 도구 확인 중...")
-	stepInstallMissingTools(bizTools, scanner)
+	// ── Step 8: Chromium Sandbox Image Preparation ──
+	printStep(8, totalUpSteps, "Chromium Sandbox 이미지 준비 중...")
+	stepChromiumSandboxImage()
 	markStepCompleted(progress, 8)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 9: AI Tool MCP Configuration ──
-	printStep(9, totalUpSteps, "AI 도구 MCP 설정 중...")
-	stepAIToolMCPConfig(providers, scanner)
+	// ── Step 9: Missing Tools Installation ──
+	printStep(9, totalUpSteps, "미설치 도구 확인 중...")
+	stepInstallMissingTools(bizTools, scanner)
 	markStepCompleted(progress, 9)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 10: Config Update ──
-	printStep(10, totalUpSteps, "설정 파일 업데이트 중...")
-	err = stepConfigUpdate(providers, creds)
-	if err != nil {
-		printError(fmt.Sprintf("설정 업데이트 실패: %v", err))
-		saveUpProgress(progress, 10, err.Error())
-		printFixSuggestion("config", err)
-		return err
-	}
+	// ── Step 10: AI Tool MCP Configuration ──
+	printStep(10, totalUpSteps, "AI 도구 MCP 설정 중...")
+	stepAIToolMCPConfig(providers, scanner)
 	markStepCompleted(progress, 10)
 	saveUpProgress(progress, 0, "")
 
-	// ── Step 11: Server Connection ──
-	printStep(11, totalUpSteps, "서버 연결 중...")
+	// ── Step 11: Config Update ──
+	printStep(11, totalUpSteps, "설정 파일 업데이트 중...")
+	err = stepConfigUpdate(providers, creds)
+	if err != nil {
+		printError(fmt.Sprintf("설정 업데이트 실패: %v", err))
+		saveUpProgress(progress, 11, err.Error())
+		printFixSuggestion("config", err)
+		return err
+	}
+	markStepCompleted(progress, 11)
+	saveUpProgress(progress, 0, "")
+
+	// ── Step 12: Server Connection ──
+	printStep(12, totalUpSteps, "서버 연결 중...")
 
 	// Clear progress file before connecting (connection is the final step)
 	clearUpProgress()
@@ -853,6 +860,256 @@ func stepInstallMissingAICLI(providers []providerInfo, scanner *bufio.Scanner) [
 	// 설치 후 프로바이더 재감지
 	fmt.Println()
 	return detectProviders()
+}
+
+// stepAISubscriptionAuth는 AI CLI 인증 상태를 확인하고 미인증 시 안내합니다.
+// 인증 실패 시에도 up 명령을 중단하지 않습니다 (NON-BLOCKING).
+// SPEC-BRIDGE-AUTH-001
+func stepAISubscriptionAuth(providers []providerInfo, scanner *bufio.Scanner) []providerInfo {
+	anyDetected := false
+	anyUnauthenticated := false
+
+	for i, p := range providers {
+		if !p.HasCLI && !p.HasAPIKey {
+			continue
+		}
+		anyDetected = true
+
+		var authResult aitools.AuthCheckResult
+		switch p.Name {
+		case "Claude":
+			authResult = aitools.CheckClaudeAuth()
+		case "Codex":
+			authResult = aitools.CheckCodexAuth()
+		case "Gemini":
+			authResult = aitools.CheckGeminiAuth()
+		default:
+			continue
+		}
+
+		// providerInfo 업데이트
+		providers[i].CLIAuthenticated = authResult.CLIAuthenticated
+
+		// 상태 출력
+		switch authResult.Status {
+		case aitools.AuthStatusAuthenticated:
+			printSuccess(fmt.Sprintf("%s: 인증됨", p.Name))
+		case aitools.AuthStatusAPIKeyOnly:
+			printSuccess(fmt.Sprintf("%s: API 키 설정됨 (%s)", p.Name, authResult.APIKeyEnvName))
+		case aitools.AuthStatusNotAuthenticated:
+			fmt.Printf("  [ ] %s: 미인증\n", p.Name)
+			anyUnauthenticated = true
+		default:
+			fmt.Printf("  ? %s: 상태 불명\n", p.Name)
+		}
+	}
+
+	if !anyDetected {
+		fmt.Println("  ! 감지된 AI 프로바이더가 없습니다.")
+		fmt.Println("    AI CLI를 설치하거나 API 키 환경변수를 설정하세요.")
+		return providers
+	}
+
+	// 미인증 프로바이더에 대한 안내
+	if anyUnauthenticated {
+		fmt.Println()
+		providers = showAuthGuide(providers, scanner)
+	}
+
+	// ChatGPT 구독 감지 (Codex)
+	providers = detectChatGPTSubscription(providers, scanner)
+
+	// 연결 테스트 제안 (기본: 건너뛰기)
+	offerConnectionTest(providers, scanner)
+
+	return providers
+}
+
+// showAuthGuide는 미인증 프로바이더에 대한 인증 가이드를 표시합니다.
+func showAuthGuide(providers []providerInfo, scanner *bufio.Scanner) []providerInfo {
+	for i, p := range providers {
+		if !p.HasCLI || p.CLIAuthenticated || p.HasAPIKey {
+			continue
+		}
+
+		switch p.Name {
+		case "Claude":
+			fmt.Println("  Claude Code가 인증되지 않았습니다.")
+			fmt.Println("    인증 방법:")
+			fmt.Println("    1) claude login 실행 (브라우저 인증)")
+			fmt.Println("    2) export ANTHROPIC_API_KEY=<your-key> 설정")
+			fmt.Println("       API 키 발급: https://console.anthropic.com/settings/keys")
+		case "Codex":
+			fmt.Println("  Codex CLI가 인증되지 않았습니다.")
+			fmt.Println("    인증 방법:")
+			fmt.Println("    1) codex auth 실행 (브라우저 인증)")
+			fmt.Println("    2) export OPENAI_API_KEY=<your-key> 설정")
+			fmt.Println("       API 키 발급: https://platform.openai.com/api-keys")
+		case "Gemini":
+			fmt.Println("  Gemini CLI가 인증되지 않았습니다.")
+			fmt.Println("    인증 방법:")
+			fmt.Println("    1) gemini auth 실행 (브라우저 인증)")
+			fmt.Println("    2) export GEMINI_API_KEY=<your-key> 설정")
+			fmt.Println("       API 키 발급: https://aistudio.google.com/apikey")
+		}
+		fmt.Println()
+
+		// 인증 진행 여부 질문
+		fmt.Printf("  %s 인증을 지금 진행하시겠습니까? (y/N): ", p.Name)
+		if scanYesNo(scanner) {
+			if runAuthCommand(p.Name) {
+				// 인증 성공 후 상태 재확인
+				var recheck aitools.AuthCheckResult
+				switch p.Name {
+				case "Claude":
+					recheck = aitools.CheckClaudeAuth()
+				case "Codex":
+					recheck = aitools.CheckCodexAuth()
+				case "Gemini":
+					recheck = aitools.CheckGeminiAuth()
+				}
+				providers[i].CLIAuthenticated = recheck.CLIAuthenticated
+				if recheck.CLIAuthenticated {
+					printSuccess(fmt.Sprintf("%s 인증 완료", p.Name))
+				} else {
+					fmt.Printf("  ! %s 인증이 완료되지 않았습니다. 나중에 다시 시도하세요.\n", p.Name)
+				}
+			}
+		} else {
+			printSkip(fmt.Sprintf("%s 인증 건너뜀", p.Name))
+		}
+	}
+
+	return providers
+}
+
+// runAuthCommand는 CLI 인증 명령을 실행합니다.
+// 성공하면 true, 실패하면 false를 반환합니다.
+func runAuthCommand(providerName string) bool {
+	var cmdName string
+	var cmdArgs []string
+
+	switch providerName {
+	case "Claude":
+		cmdName = "claude"
+		cmdArgs = []string{"login"}
+	case "Codex":
+		cmdName = "codex"
+		cmdArgs = []string{"auth"}
+	case "Gemini":
+		cmdName = "gemini"
+		cmdArgs = []string{"auth"}
+	default:
+		return false
+	}
+
+	fmt.Printf("  %s %s 실행 중...\n", cmdName, strings.Join(cmdArgs, " "))
+
+	cmd := exec.Command(cmdName, cmdArgs...)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Run(); err != nil {
+		printError(fmt.Sprintf("%s 인증 실행 실패: %v", providerName, err))
+		return false
+	}
+
+	return true
+}
+
+// detectChatGPTSubscription는 Codex CLI가 미인증+API키 없을 때 ChatGPT 구독 여부를 확인합니다.
+// SPEC-BRIDGE-AUTH-001 REQ-BA-003
+func detectChatGPTSubscription(providers []providerInfo, scanner *bufio.Scanner) []providerInfo {
+	for i, p := range providers {
+		if p.Name != "Codex" || p.CLIAuthenticated || p.HasAPIKey {
+			continue
+		}
+		if !p.HasCLI {
+			continue
+		}
+
+		fmt.Println("  ChatGPT Plus/Pro 구독이 있으신가요?")
+		fmt.Println("  구독이 있으면 Codex를 app-server 모드로 사용할 수 있습니다.")
+		fmt.Printf("  ChatGPT Plus/Pro 구독 보유 (Y/n): ")
+
+		if scanYesNoDefault(scanner, true) {
+			providers[i].ChatGPTAuth = true
+			printSuccess("Codex 모드: app-server (ChatGPT 인증 사용)")
+			fmt.Println("    ChatGPT 인증 안내:")
+			fmt.Println("    codex auth 실행 후 ChatGPT 계정으로 로그인하세요.")
+			fmt.Println()
+
+			// ChatGPT 인증 진행 여부
+			fmt.Printf("  지금 ChatGPT 인증을 진행하시겠습니까? (y/N): ")
+			if scanYesNo(scanner) {
+				if runAuthCommand("Codex") {
+					providers[i].CLIAuthenticated = true
+					printSuccess("Codex ChatGPT 인증 완료")
+				}
+			}
+		} else {
+			fmt.Println("    API 키를 설정하세요:")
+			fmt.Println("    export OPENAI_API_KEY=<your-key>")
+			fmt.Println("    API 키 발급: https://platform.openai.com/api-keys")
+		}
+	}
+	return providers
+}
+
+// offerConnectionTest는 인증된 프로바이더에 대한 연결 테스트를 제안합니다.
+// 기본값은 건너뛰기(N)로 크레딧 소모를 방지합니다.
+// SPEC-BRIDGE-AUTH-001 REQ-BA-004
+func offerConnectionTest(providers []providerInfo, scanner *bufio.Scanner) {
+	// 인증된 프로바이더 목록 생성
+	var authenticatedProviders []string
+	for _, p := range providers {
+		if p.CLIAuthenticated || p.HasAPIKey {
+			authenticatedProviders = append(authenticatedProviders, p.Name)
+		}
+	}
+
+	if len(authenticatedProviders) == 0 {
+		return
+	}
+
+	fmt.Println()
+	fmt.Printf("  연결 테스트를 수행하시겠습니까? (y/N): ")
+	if !scanYesNo(scanner) {
+		printSkip("연결 테스트 건너뜀")
+		return
+	}
+
+	fmt.Println("  연결 테스트 중...")
+	validator := aitools.NewValidator()
+	ctx := context.Background()
+
+	for _, name := range authenticatedProviders {
+		var result aitools.ValidationResult
+		switch name {
+		case "Claude":
+			result = validator.ValidateClaudeCLI(ctx)
+		case "Codex":
+			result = validator.ValidateCodexCLI(ctx)
+		case "Gemini":
+			result = validator.ValidateGeminiCLI(ctx)
+		default:
+			continue
+		}
+
+		switch result.Status {
+		case aitools.ValidationSuccess:
+			printSuccess(fmt.Sprintf("%s: 연결 성공 (%.1f초)", name, result.ResponseTime.Seconds()))
+		case aitools.ValidationAuthFailure:
+			printError(fmt.Sprintf("%s: 인증 실패", name))
+		case aitools.ValidationTimeout:
+			printError(fmt.Sprintf("%s: 연결 시간 초과", name))
+		case aitools.ValidationRateLimit:
+			fmt.Printf("  ! %s: 요청 제한 (나중에 다시 시도하세요)\n", name)
+		default:
+			printError(fmt.Sprintf("%s: 연결 실패", name))
+		}
+	}
 }
 
 // stepAIToolMCPConfig는 감지된 AI CLI 도구에 Autopus MCP를 설정합니다.
