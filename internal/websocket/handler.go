@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/insajin/autopus-agent-protocol"
+	"github.com/insajin/autopus-bridge/internal/agentbrowser"
 	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/codegen"
 	"github.com/insajin/autopus-bridge/internal/computeruse"
@@ -104,6 +105,9 @@ type Router struct {
 	// computerUseHandler는 Computer Use 핸들러입니다 (SPEC-COMPUTER-USE-001).
 	computerUseHandler *computeruse.Handler
 
+	// agentBrowserHandler는 Agent Browser 핸들러입니다 (SPEC-BROWSER-AGENT-001).
+	agentBrowserHandler *agentbrowser.Handler
+
 	// codegenExecutor는 MCP 서버 코드 생성을 담당합니다 (SPEC-SELF-EXPAND-001).
 	codegenExecutor CodegenExecutor
 	// mcpDeployer는 MCP 서버 배포를 담당합니다 (SPEC-SELF-EXPAND-001).
@@ -183,6 +187,13 @@ func WithMCPStarter(starter MCPServerStarter) RouterOption {
 func WithComputerUseHandler(handler *computeruse.Handler) RouterOption {
 	return func(r *Router) {
 		r.computerUseHandler = handler
+	}
+}
+
+// WithAgentBrowserHandler는 Agent Browser 핸들러를 설정합니다 (SPEC-BROWSER-AGENT-001).
+func WithAgentBrowserHandler(handler *agentbrowser.Handler) RouterOption {
+	return func(r *Router) {
+		r.agentBrowserHandler = handler
 	}
 }
 
@@ -270,6 +281,11 @@ func (r *Router) registerDefaultHandlers() {
 	r.RegisterHandler(ws.AgentMsgComputerSessionStart, r.handleComputerSessionStart)
 	r.RegisterHandler(ws.AgentMsgComputerAction, r.handleComputerAction)
 	r.RegisterHandler(ws.AgentMsgComputerSessionEnd, r.handleComputerSessionEnd)
+
+	// Agent Browser 핸들러 (SPEC-BROWSER-AGENT-001)
+	r.RegisterHandler(agentMsgBrowserSessionStart, r.handleBrowserSessionStart)
+	r.RegisterHandler(agentMsgBrowserAction, r.handleBrowserAction)
+	r.RegisterHandler(agentMsgBrowserSessionEnd, r.handleBrowserSessionEnd)
 
 	// MCP Codegen/Deploy 핸들러 (SPEC-SELF-EXPAND-001)
 	r.RegisterHandler(ws.AgentMsgMCPCodegenRequest, r.handleMCPCodegenRequest)
@@ -625,61 +641,244 @@ func (r *Router) handleComputerSessionEnd(ctx context.Context, msg ws.AgentMessa
 	return nil
 }
 
-// OnReconnected restores Computer Use session state after a WebSocket
-// reconnection. For each active session it notifies the server that the
-// session is still alive and resends any pending action results that were
+// OnReconnected restores Computer Use and Agent Browser session state after a
+// WebSocket reconnection. For each active session it notifies the server that
+// the session is still alive and resends any pending action results that were
 // not delivered before the connection dropped (REQ-M3-04).
 //
 // Implements the ReconnectionHandler interface.
 func (r *Router) OnReconnected(ctx context.Context) error {
-	if r.computerUseHandler == nil {
-		return nil
-	}
+	// Computer Use 세션 복원
+	if r.computerUseHandler != nil {
+		sessions := r.computerUseHandler.GetActiveSessions()
+		if len(sessions) > 0 {
+			log.Printf("[computer-use] reconnected: restoring %d active session(s)", len(sessions))
 
-	sessions := r.computerUseHandler.GetActiveSessions()
-	if len(sessions) == 0 {
-		return nil
-	}
+			for _, session := range sessions {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
 
-	log.Printf("[computer-use] reconnected: restoring %d active session(s)", len(sessions))
+				// 서버에 활성 세션 알림
+				sessionPayload := ws.ComputerSessionPayload{
+					ExecutionID: session.ExecutionID,
+					SessionID:   session.ID,
+					URL:         session.URL,
+					ViewportW:   session.ViewportW,
+					ViewportH:   session.ViewportH,
+					Headless:    session.Headless,
+				}
+				if err := r.client.sendMessage(ws.AgentMsgComputerSessionStart, sessionPayload); err != nil {
+					log.Printf("[computer-use] failed to restore session %s: %v", session.ID, err)
+					continue
+				}
 
-	for _, session := range sessions {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+				log.Printf("[computer-use] session %s restored", session.ID)
 
-		// 서버에 활성 세션 알림
-		sessionPayload := ws.ComputerSessionPayload{
-			ExecutionID: session.ExecutionID,
-			SessionID:   session.ID,
-			URL:         session.URL,
-			ViewportW:   session.ViewportW,
-			ViewportH:   session.ViewportH,
-			Headless:    session.Headless,
-		}
-		if err := r.client.sendMessage(ws.AgentMsgComputerSessionStart, sessionPayload); err != nil {
-			log.Printf("[computer-use] failed to restore session %s: %v", session.ID, err)
-			continue
-		}
-
-		log.Printf("[computer-use] session %s restored", session.ID)
-
-		// 미전송 결과 재전송
-		pending := session.DrainPendingResults()
-		for _, p := range pending {
-			if result, ok := p.Payload.(ws.ComputerResultPayload); ok {
-				if err := r.client.SendComputerResult(result); err != nil {
-					log.Printf("[computer-use] failed to resend pending result for session %s, re-queuing: %v",
-						session.ID, err)
-					// 재전송 실패 시 다시 큐에 넣기
-					session.QueueResult(result)
-				} else {
-					log.Printf("[computer-use] resent pending result for session %s (age=%v)",
-						session.ID, time.Since(p.CreatedAt))
+				// 미전송 결과 재전송
+				pending := session.DrainPendingResults()
+				for _, p := range pending {
+					if result, ok := p.Payload.(ws.ComputerResultPayload); ok {
+						if err := r.client.SendComputerResult(result); err != nil {
+							log.Printf("[computer-use] failed to resend pending result for session %s, re-queuing: %v",
+								session.ID, err)
+							// 재전송 실패 시 다시 큐에 넣기
+							session.QueueResult(result)
+						} else {
+							log.Printf("[computer-use] resent pending result for session %s (age=%v)",
+								session.ID, time.Since(p.CreatedAt))
+						}
+					}
 				}
 			}
+		}
+	}
+
+	// Agent Browser 세션 복원 (SPEC-BROWSER-AGENT-001)
+	if r.agentBrowserHandler != nil {
+		sessions := r.agentBrowserHandler.GetActiveSessions()
+		if len(sessions) > 0 {
+			log.Printf("[agent-browser] reconnected: restoring %d active session(s)", len(sessions))
+
+			for _, session := range sessions {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				default:
+				}
+
+				// 서버에 활성 세션 알림
+				sessionPayload := agentbrowser.BrowserSessionPayload{
+					ExecutionID: session.ExecutionID,
+					SessionID:   session.ID,
+					URL:         session.URL,
+					Headless:    session.Headless,
+				}
+				if err := r.client.sendMessage(agentMsgBrowserSessionStart, sessionPayload); err != nil {
+					log.Printf("[agent-browser] failed to restore session %s: %v", session.ID, err)
+					continue
+				}
+
+				log.Printf("[agent-browser] session %s restored", session.ID)
+
+				// 미전송 결과 재전송
+				pending := session.DrainPendingResults()
+				for _, p := range pending {
+					if result, ok := p.Payload.(agentbrowser.BrowserResultPayload); ok {
+						if err := r.client.sendMessage(agentMsgBrowserResult, result); err != nil {
+							log.Printf("[agent-browser] failed to resend pending result for session %s, re-queuing: %v",
+								session.ID, err)
+							session.QueueResult(result)
+						} else {
+							log.Printf("[agent-browser] resent pending result for session %s (age=%v)",
+								session.ID, time.Since(p.CreatedAt))
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// Agent Browser 메시지 타입 상수 (SPEC-BROWSER-AGENT-001).
+// autopus-agent-protocol 패키지에 정의될 때까지 로컬 상수를 유지한다.
+const (
+	agentMsgBrowserSessionStart = "browser_session_start"
+	agentMsgBrowserAction       = "browser_action"
+	agentMsgBrowserSessionEnd   = "browser_session_end"
+	agentMsgBrowserSessionReady = "browser_session_ready"
+	agentMsgBrowserResult       = "browser_result"
+	agentMsgBrowserNotAvailable = "browser_not_available"
+	agentMsgBrowserError        = "browser_error"
+)
+
+// handleBrowserSessionStart는 Agent Browser 세션 시작 메시지를 처리합니다 (SPEC-BROWSER-AGENT-001).
+func (r *Router) handleBrowserSessionStart(ctx context.Context, msg ws.AgentMessage) error {
+	var payload agentbrowser.BrowserSessionPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		errPayload := ws.TaskErrorPayload{
+			ExecutionID: "",
+			Code:        "INVALID_PAYLOAD",
+			Message:     fmt.Sprintf("browser session start 페이로드 파싱 실패: %v", err),
+			Retryable:   false,
+		}
+		return r.client.SendTaskError(errPayload)
+	}
+
+	if r.agentBrowserHandler == nil {
+		errPayload := ws.TaskErrorPayload{
+			ExecutionID: payload.ExecutionID,
+			Code:        "NO_HANDLER",
+			Message:     "Agent Browser 핸들러가 설정되지 않았습니다",
+			Retryable:   false,
+		}
+		return r.client.SendTaskError(errPayload)
+	}
+
+	result, err := r.agentBrowserHandler.HandleSessionStart(ctx, payload)
+	if err != nil {
+		// not_available 또는 에러 응답
+		msgType := agentMsgBrowserError
+		if result != nil && result.Status == "not_available" {
+			msgType = agentMsgBrowserNotAvailable
+		}
+		if result != nil {
+			_ = r.client.sendMessage(msgType, result)
+		}
+		if r.onError != nil {
+			r.onError(fmt.Errorf("browser session start 실패 (session=%s): %w", payload.SessionID, err))
+		}
+		return nil
+	}
+
+	// browser_session_ready 응답
+	return r.client.sendMessage(agentMsgBrowserSessionReady, result)
+}
+
+// handleBrowserAction은 Agent Browser 액션 메시지를 처리합니다 (SPEC-BROWSER-AGENT-001).
+func (r *Router) handleBrowserAction(ctx context.Context, msg ws.AgentMessage) error {
+	var payload agentbrowser.BrowserActionPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		errPayload := ws.TaskErrorPayload{
+			ExecutionID: "",
+			Code:        "INVALID_PAYLOAD",
+			Message:     fmt.Sprintf("browser action 페이로드 파싱 실패: %v", err),
+			Retryable:   false,
+		}
+		return r.client.SendTaskError(errPayload)
+	}
+
+	if r.agentBrowserHandler == nil {
+		resultPayload := agentbrowser.BrowserResultPayload{
+			ExecutionID: payload.ExecutionID,
+			SessionID:   payload.SessionID,
+			Success:     false,
+			Error:       "Agent Browser 핸들러가 설정되지 않았습니다",
+			DurationMs:  0,
+		}
+		return r.client.sendMessage(agentMsgBrowserResult, resultPayload)
+	}
+
+	// 비동기로 액션 실행 (REQ-M3-04: 결과를 세션에 큐잉 후 전송)
+	go func() {
+		result, err := r.agentBrowserHandler.HandleAction(ctx, payload)
+
+		var resultPayload agentbrowser.BrowserResultPayload
+		if err != nil {
+			resultPayload = agentbrowser.BrowserResultPayload{
+				ExecutionID: payload.ExecutionID,
+				SessionID:   payload.SessionID,
+				Success:     false,
+				Error:       err.Error(),
+			}
+		} else if result != nil {
+			resultPayload = *result
+		}
+
+		// REQ-M3-04: 전송 전에 세션 pending 큐에 저장
+		session, exists := r.agentBrowserHandler.SessionManager().GetSession(payload.SessionID)
+		if exists && session != nil {
+			session.QueueResult(resultPayload)
+		}
+
+		// 전송 시도 - 성공 시 pending 큐에서 제거
+		if sendErr := r.client.sendMessage(agentMsgBrowserResult, resultPayload); sendErr == nil {
+			if exists && session != nil {
+				session.DrainPendingResults()
+			}
+		} else {
+			log.Printf("[agent-browser] failed to send result for session %s, queued for reconnection: %v",
+				payload.SessionID, sendErr)
+		}
+	}()
+
+	return nil
+}
+
+// handleBrowserSessionEnd는 Agent Browser 세션 종료 메시지를 처리합니다 (SPEC-BROWSER-AGENT-001).
+func (r *Router) handleBrowserSessionEnd(ctx context.Context, msg ws.AgentMessage) error {
+	var payload agentbrowser.BrowserSessionPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		errPayload := ws.TaskErrorPayload{
+			ExecutionID: "",
+			Code:        "INVALID_PAYLOAD",
+			Message:     fmt.Sprintf("browser session end 페이로드 파싱 실패: %v", err),
+			Retryable:   false,
+		}
+		return r.client.SendTaskError(errPayload)
+	}
+
+	if r.agentBrowserHandler == nil {
+		return nil
+	}
+
+	if err := r.agentBrowserHandler.HandleSessionEnd(ctx, payload); err != nil {
+		if r.onError != nil {
+			r.onError(fmt.Errorf("browser session end 실패 (session=%s): %w", payload.SessionID, err))
 		}
 	}
 
