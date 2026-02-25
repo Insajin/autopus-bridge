@@ -50,7 +50,7 @@ Once connected, the bridge receives task requests from the Autopus platform and 
 | `status` | Display current connection status, uptime, and task statistics |
 | `up` | Unified smart command that combines login, setup, and connect in one step |
 | `setup` | Run the interactive setup wizard to detect AI CLI tools and configure providers |
-| `login` | Authenticate with the Autopus server using Device Authorization Flow (RFC 8628) |
+| `login` | Authenticate with the Autopus server using Device Authorization Flow (RFC 8628) + PKCE (RFC 7636) |
 | `dashboard` | Open an interactive TUI dashboard for real-time monitoring of connection, tasks, and resources |
 | `tools` | Detect, verify, and report on installed AI tools and their status |
 | `update` | Check for and install the latest version from GitHub Releases |

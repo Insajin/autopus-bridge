@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-02-26
+
+### Changed
+
+- CLI 인증 시스템 PKCE + 워크스페이스 통합으로 전면 개선 (SPEC-BRIDGE-DEVAUTH-001)
+  - Device Auth Flow에 PKCE S256 challenge 추가 (RFC 7636)
+  - 토큰 응답에 사용자 워크스페이스 목록 포함
+  - `login.go` 627→335줄 (47% 감소) 코드 대폭 단순화
+  - 기존 `/auth/cli-token` 방식 deprecation 준비 완료
+
+### Added
+
+- CLI 정적 분석 테스트 + credentials 워크스페이스 테스트
+  - login 함수 정적 분석 기반 테스트 추가
+  - credentials.json 워크스페이스 데이터 검증 테스트 추가
+
 ## [1.4.0] - 2026-02-25
 
 ### Removed
@@ -110,6 +126,8 @@ Previously located at `github.com/anthropics/acos/cmd/local-agent-bridge`.
 - Protocol types extracted to separate SDK: `github.com/insajin/autopus-agent-protocol`
 - See [docs/MIGRATION.md](docs/MIGRATION.md) for upgrade instructions
 
+[1.5.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.5.0
+[1.4.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.4.0
 [1.3.1]: https://github.com/insajin/autopus-bridge/releases/tag/v1.3.1
 [1.3.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.3.0
 [1.1.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.1.0
