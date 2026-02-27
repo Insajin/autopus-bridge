@@ -398,10 +398,11 @@ func (p *CodexAppServerProvider) Name() string {
 }
 
 // Supports는 주어진 모델명을 지원하는지 확인합니다.
-// codexSupportedModels 슬라이스와 비교합니다.
+// OpenRouter 형식(openai/o3-mini)과 레거시 형식 모두 지원합니다.
 func (p *CodexAppServerProvider) Supports(model string) bool {
+	bare := StripProviderPrefix(model)
 	for _, supported := range codexSupportedModels {
-		if model == supported {
+		if bare == supported {
 			return true
 		}
 	}

@@ -47,14 +47,25 @@ func (r *Registry) Get(name string) Provider {
 }
 
 // GetForModel은 모델명에 맞는 프로바이더를 반환합니다.
-// 모델명 패턴에 따라 적절한 프로바이더를 선택합니다.
+// OpenRouter 형식(provider/model)과 레거시 형식 모두 지원합니다.
 func (r *Registry) GetForModel(model string) (Provider, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	// 모델명 기반 프로바이더 매핑
+	// 1. OpenRouter 형식 우선 확인 (예: "openai/o3-mini", "anthropic/claude-sonnet-4-6")
+	if IsOpenRouterFormat(model) {
+		prefix, _ := ParseOpenRouterID(model)
+		providerName := ResolveProviderName(prefix)
+		if providerName != "" {
+			if p, ok := r.providers[providerName]; ok {
+				return p, nil
+			}
+			return nil, fmt.Errorf("%w: %s 프로바이더가 등록되지 않았습니다", ErrProviderNotFound, providerName)
+		}
+	}
+
+	// 2. 레거시 형식 폴백 (접두사 기반 매핑)
 	// claude-* -> claude 프로바이더
-	// gemini-* -> gemini 프로바이더
 	if strings.HasPrefix(model, "claude-") {
 		if p, ok := r.providers["claude"]; ok {
 			return p, nil
@@ -62,6 +73,7 @@ func (r *Registry) GetForModel(model string) (Provider, error) {
 		return nil, fmt.Errorf("%w: claude 프로바이더가 등록되지 않았습니다", ErrProviderNotFound)
 	}
 
+	// gemini-* -> gemini 프로바이더
 	if strings.HasPrefix(model, "gemini-") {
 		if p, ok := r.providers["gemini"]; ok {
 			return p, nil
@@ -69,15 +81,15 @@ func (r *Registry) GetForModel(model string) (Provider, error) {
 		return nil, fmt.Errorf("%w: gemini 프로바이더가 등록되지 않았습니다", ErrProviderNotFound)
 	}
 
-	// Codex (OpenAI) 모델 매핑
-	if strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o4-") {
+	// gpt-*, o4-*, o3-* -> codex 프로바이더
+	if strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o4-") || strings.HasPrefix(model, "o3-") {
 		if p, ok := r.providers["codex"]; ok {
 			return p, nil
 		}
 		return nil, fmt.Errorf("%w: codex 프로바이더가 등록되지 않았습니다", ErrProviderNotFound)
 	}
 
-	// 등록된 모든 프로바이더에서 지원 여부 확인
+	// 3. 등록된 모든 프로바이더에서 지원 여부 확인
 	for _, provider := range r.providers {
 		if provider.Supports(model) {
 			return provider, nil
@@ -652,10 +664,13 @@ func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger
 
 // Execute는 모델에 맞는 프로바이더를 찾아 실행합니다.
 // 편의 메서드로, GetForModel + Execute를 한 번에 수행합니다.
+// OpenRouter 형식(openai/o3-mini)은 자동으로 프로바이더 접두사를 제거합니다.
 func (r *Registry) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
 	provider, err := r.GetForModel(req.Model)
 	if err != nil {
 		return nil, err
 	}
+	// OpenRouter 형식이면 프로바이더 접두사 제거 (하위 API/CLI가 이해할 수 있는 형식으로)
+	req.Model = StripProviderPrefix(req.Model)
 	return provider.Execute(ctx, req)
 }

@@ -90,8 +90,11 @@ func TestRegistryGetForModel(t *testing.T) {
 	claudeMock := &mockProvider{name: "claude", supportedModel: "claude-sonnet-4-20250514"}
 	geminiMock := &mockProvider{name: "gemini", supportedModel: "gemini-2.0-flash"}
 
+	codexMock := &mockProvider{name: "codex", supportedModel: "o3-mini"}
+
 	r.Register(claudeMock)
 	r.Register(geminiMock)
+	r.Register(codexMock)
 
 	tests := []struct {
 		name         string
@@ -112,8 +115,44 @@ func TestRegistryGetForModel(t *testing.T) {
 			wantErr:      false,
 		},
 		{
+			name:         "o3 모델 codex 라우팅 (레거시)",
+			model:        "o3-mini",
+			wantProvider: "codex",
+			wantErr:      false,
+		},
+		{
+			name:         "o4 모델 codex 라우팅 (레거시)",
+			model:        "o4-mini",
+			wantProvider: "codex",
+			wantErr:      false,
+		},
+		{
+			name:         "gpt 모델 codex 라우팅 (레거시)",
+			model:        "gpt-5-codex",
+			wantProvider: "codex",
+			wantErr:      false,
+		},
+		{
+			name:         "OpenRouter openai/ codex 라우팅",
+			model:        "openai/o3-mini",
+			wantProvider: "codex",
+			wantErr:      false,
+		},
+		{
+			name:         "OpenRouter anthropic/ claude 라우팅",
+			model:        "anthropic/claude-sonnet-4-6",
+			wantProvider: "claude",
+			wantErr:      false,
+		},
+		{
+			name:         "OpenRouter google/ gemini 라우팅",
+			model:        "google/gemini-2.0-flash",
+			wantProvider: "gemini",
+			wantErr:      false,
+		},
+		{
 			name:    "지원하지 않는 모델",
-			model:   "gpt-4",
+			model:   "unknown-model",
 			wantErr: true,
 		},
 	}

@@ -1234,7 +1234,7 @@ func runAuthCommand(providerName string) bool {
 		cmdArgs = []string{"login"}
 	case "Codex":
 		cmdName = "codex"
-		cmdArgs = []string{"auth"}
+		cmdArgs = []string{"login"}
 	case "Gemini":
 		cmdName = "gemini"
 		cmdArgs = []string{"auth"}

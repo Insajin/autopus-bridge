@@ -217,6 +217,21 @@ func TestCodexAppServerProvider_Supports(t *testing.T) {
 			expected: true,
 		},
 		{
+			name:     "o3-mini 지원 (레거시)",
+			model:    "o3-mini",
+			expected: true,
+		},
+		{
+			name:     "openai/o3-mini 지원 (OpenRouter)",
+			model:    "openai/o3-mini",
+			expected: true,
+		},
+		{
+			name:     "openai/gpt-5-codex 지원 (OpenRouter)",
+			model:    "openai/gpt-5-codex",
+			expected: true,
+		},
+		{
 			name:     "지원하지 않는 모델",
 			model:    "unknown-model",
 			expected: false,

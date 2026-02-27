@@ -20,6 +20,8 @@ var codexSupportedModels = []string{
 	"gpt-5-codex",
 	// O4 Mini
 	"o4-mini",
+	// O3 Mini
+	"o3-mini",
 }
 
 // openAIChatRequest는 OpenAI Chat Completions API 요청 구조입니다.
@@ -145,22 +147,27 @@ func (p *CodexProvider) ValidateConfig() error {
 }
 
 // Supports는 주어진 모델명을 지원하는지 확인합니다.
+// OpenRouter 형식(openai/o3-mini)과 레거시 형식 모두 지원합니다.
 func (p *CodexProvider) Supports(model string) bool {
-	// gpt- 또는 o4- 접두사로 시작하는지 확인
-	if !strings.HasPrefix(model, "gpt-") && !strings.HasPrefix(model, "o4-") {
+	// OpenRouter 형식이면 접두사를 제거하고 확인
+	bare := StripProviderPrefix(model)
+
+	// gpt-, o4-, o3- 접두사로 시작하는지 확인
+	if !strings.HasPrefix(bare, "gpt-") && !strings.HasPrefix(bare, "o4-") && !strings.HasPrefix(bare, "o3-") {
 		return false
 	}
 
 	// 지원 모델 목록에서 확인
 	for _, supported := range codexSupportedModels {
-		if model == supported {
+		if bare == supported {
 			return true
 		}
 	}
 
-	// gpt-5-*, o4-* 패턴 매칭
-	if strings.HasPrefix(model, "gpt-5-") ||
-		strings.HasPrefix(model, "o4-") {
+	// gpt-5-*, o4-*, o3-* 패턴 매칭
+	if strings.HasPrefix(bare, "gpt-5-") ||
+		strings.HasPrefix(bare, "o4-") ||
+		strings.HasPrefix(bare, "o3-") {
 		return true
 	}
 
@@ -171,8 +178,8 @@ func (p *CodexProvider) Supports(model string) bool {
 func (p *CodexProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
 	startTime := time.Now()
 
-	// 모델 결정
-	model := req.Model
+	// 모델 결정 (OpenRouter 접두사 제거)
+	model := StripProviderPrefix(req.Model)
 	if model == "" {
 		model = p.config.DefaultModel
 	}

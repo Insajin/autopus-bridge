@@ -132,17 +132,19 @@ func (p *CodexCLIProvider) ValidateConfig() error {
 }
 
 // Supports는 주어진 모델명을 지원하는지 확인합니다.
-// CLI 모드에서는 gpt- 또는 o4- 접두사를 가진 모든 모델을 지원합니다.
+// OpenRouter 형식(openai/o3-mini)과 레거시 형식 모두 지원합니다.
+// CLI 모드에서는 gpt-, o4-, o3- 접두사를 가진 모든 모델을 지원합니다.
 func (p *CodexCLIProvider) Supports(model string) bool {
-	return strings.HasPrefix(model, "gpt-") || strings.HasPrefix(model, "o4-")
+	bare := StripProviderPrefix(model)
+	return strings.HasPrefix(bare, "gpt-") || strings.HasPrefix(bare, "o4-") || strings.HasPrefix(bare, "o3-")
 }
 
 // Execute는 codex CLI를 통해 프롬프트를 실행하고 결과를 반환합니다.
 func (p *CodexCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
 	startTime := time.Now()
 
-	// 모델 결정
-	model := req.Model
+	// 모델 결정 (OpenRouter 접두사 제거)
+	model := StripProviderPrefix(req.Model)
 	if model == "" {
 		model = p.config.DefaultModel
 	}
