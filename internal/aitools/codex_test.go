@@ -90,8 +90,7 @@ model = "o3"
 			setupExisting: true,
 			existingContent: `# 기존 설정
 [mcp_servers.autopus]
-command = "autopus-bridge"
-args = ["mcp-serve"]
+command = "autopus-mcp-server"
 `,
 			description: "이미 설정되어 있으면 중복 추가하지 않아야 합니다",
 		},
@@ -131,9 +130,9 @@ args = ["mcp-serve"]
 				t.Error("설정 파일에 [mcp_servers.autopus] 섹션이 없습니다")
 			}
 
-			// autopus-bridge 명령어가 포함되어 있는지 확인
-			if !strings.Contains(contentStr, `"autopus-bridge"`) {
-				t.Error("설정 파일에 autopus-bridge 명령어가 없습니다")
+			// autopus-mcp-server 명령어가 포함되어 있는지 확인
+			if !strings.Contains(contentStr, "autopus-mcp-server") {
+				t.Error("설정 파일에 autopus-mcp-server 명령어가 없습니다")
 			}
 
 			// 기존 설정이 있었다면 유지되는지 확인
@@ -292,16 +291,13 @@ func TestConfigureCodexMCP_쓰기실패(t *testing.T) {
 }
 
 // TestCodexMCPSection은 codexMCPSection 상수의 내용을 검증합니다.
+// Plugin Mode 제거 후 독립 바이너리(autopus-mcp-server)를 사용합니다.
 func TestCodexMCPSection(t *testing.T) {
 	if !strings.Contains(codexMCPSection, "[mcp_servers.autopus]") {
 		t.Error("codexMCPSection에 [mcp_servers.autopus] 섹션이 없습니다")
 	}
 
-	if !strings.Contains(codexMCPSection, `"autopus-bridge"`) {
-		t.Error("codexMCPSection에 autopus-bridge 명령어가 없습니다")
-	}
-
-	if !strings.Contains(codexMCPSection, `"mcp-serve"`) {
-		t.Error("codexMCPSection에 mcp-serve 인자가 없습니다")
+	if !strings.Contains(codexMCPSection, "autopus-mcp-server") {
+		t.Error("codexMCPSection에 autopus-mcp-server 명령어가 없습니다")
 	}
 }

@@ -151,8 +151,8 @@ func TestConfigureGeminiMCP(t *testing.T) {
 				t.Fatal("autopus 서버가 추가되지 않았습니다")
 			}
 
-			if autopus["command"] != "autopus-bridge" {
-				t.Errorf("autopus command = %v, want %q", autopus["command"], "autopus-bridge")
+			if autopus["command"] != "autopus-mcp-server" {
+				t.Errorf("autopus command = %v, want %q", autopus["command"], "autopus-mcp-server")
 			}
 
 			// 기존 설정이 유지되는지 확인
@@ -330,7 +330,7 @@ func TestConfigureGeminiMCP_멱등성(t *testing.T) {
 		t.Fatal("autopus 서버 데이터가 올바르지 않습니다")
 	}
 
-	if autopusData["command"] != "autopus-bridge" {
-		t.Errorf("command = %v, want %q", autopusData["command"], "autopus-bridge")
+	if autopusData["command"] != "autopus-mcp-server" {
+		t.Errorf("command = %v, want %q", autopusData["command"], "autopus-mcp-server")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -113,8 +114,22 @@ func RequestDeviceCode(apiBaseURL string, pkce *PKCEPair) (*DeviceCodeResponse, 
 		return nil, fmt.Errorf("디바이스 코드 요청 실패 (HTTP %d)", resp.StatusCode)
 	}
 
+	// 백엔드 표준 래핑 응답 {"success":true,"data":{...}} 파싱
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("디바이스 코드 응답 읽기 실패: %w", err)
+	}
+
 	var deviceResp DeviceCodeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&deviceResp); err != nil {
+
+	// 래핑 응답 시도
+	var wrapped struct {
+		Success bool               `json:"success"`
+		Data    DeviceCodeResponse `json:"data"`
+	}
+	if json.Unmarshal(respBody, &wrapped) == nil && wrapped.Success {
+		deviceResp = wrapped.Data
+	} else if err := json.Unmarshal(respBody, &deviceResp); err != nil {
 		return nil, fmt.Errorf("디바이스 코드 응답 파싱 실패: %w", err)
 	}
 
@@ -179,11 +194,22 @@ func PollDeviceToken(ctx context.Context, apiBaseURL, deviceCode string, interva
 				continue
 			}
 
-			var tokenResp DeviceTokenResponse
-			decodeErr := json.NewDecoder(resp.Body).Decode(&tokenResp)
+			respBody, readErr := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
+			if readErr != nil {
+				continue
+			}
 
-			if decodeErr != nil {
+			// 백엔드 표준 래핑 응답 {"success":true,"data":{...}} 또는
+			// RFC 8628 에러 응답 {"error":"authorization_pending"} 구분
+			var tokenResp DeviceTokenResponse
+			var wrapped struct {
+				Success bool                `json:"success"`
+				Data    DeviceTokenResponse `json:"data"`
+			}
+			if json.Unmarshal(respBody, &wrapped) == nil && wrapped.Success {
+				tokenResp = wrapped.Data
+			} else if json.Unmarshal(respBody, &tokenResp) != nil {
 				// 파싱 오류 시 폴링 계속
 				continue
 			}

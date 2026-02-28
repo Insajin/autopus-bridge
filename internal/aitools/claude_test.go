@@ -131,8 +131,8 @@ func TestConfigureClaudeCodeMCP(t *testing.T) {
 				t.Fatal("autopus 서버가 추가되지 않았습니다")
 			}
 
-			if autopus["command"] != "autopus-bridge" {
-				t.Errorf("autopus command = %v, want %q", autopus["command"], "autopus-bridge")
+			if autopus["command"] != "autopus-mcp-server" {
+				t.Errorf("autopus command = %v, want %q", autopus["command"], "autopus-mcp-server")
 			}
 
 			// 기존 서버가 유지되는지 확인

@@ -11,8 +11,7 @@ import (
 
 const codexMCPSection = `
 [mcp_servers.autopus]
-command = "autopus-bridge"
-args = ["mcp-serve"]
+command = "autopus-mcp-server"
 `
 
 // DetectCodexCLI는 Codex CLI의 설치 여부를 감지합니다.

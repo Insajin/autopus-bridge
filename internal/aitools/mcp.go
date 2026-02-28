@@ -26,10 +26,10 @@ type MCPServerConfig struct {
 }
 
 // DefaultAutopusMCPServer는 Autopus MCP 서버 기본 설정을 반환합니다.
+// 독립 바이너리 autopus-mcp-server를 사용합니다 (Plugin Mode 제거에 따른 변경).
 func DefaultAutopusMCPServer() MCPServerConfig {
 	return MCPServerConfig{
-		Command: "autopus-bridge",
-		Args:    []string{"mcp-serve"},
+		Command: "autopus-mcp-server",
 	}
 }
 
@@ -104,8 +104,11 @@ func addMCPServerToJSON(config map[string]interface{}, serverName string, server
 		config["mcpServers"] = mcpServers
 	}
 
-	mcpServers[serverName] = map[string]interface{}{
+	entry := map[string]interface{}{
 		"command": server.Command,
-		"args":    server.Args,
 	}
+	if len(server.Args) > 0 {
+		entry["args"] = server.Args
+	}
+	mcpServers[serverName] = entry
 }

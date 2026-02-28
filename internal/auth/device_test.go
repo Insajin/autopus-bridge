@@ -128,6 +128,30 @@ func TestRequestDeviceCode_BridgeVersionHeader(t *testing.T) {
 	}
 }
 
+func TestRequestDeviceCode_WrappedResponse(t *testing.T) {
+	// 백엔드 표준 래핑 응답: {"success":true,"data":{...}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"data":{"device_code":"wrapped-code","user_code":"WRAP-TEST","verification_uri":"https://autopus.co/device","verification_uri_complete":"https://autopus.co/device?code=WRAP-TEST","expires_in":600,"interval":5}}`))
+	}))
+	defer server.Close()
+
+	resp, err := RequestDeviceCode(server.URL, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.DeviceCode != "wrapped-code" {
+		t.Errorf("expected device_code 'wrapped-code', got '%s'", resp.DeviceCode)
+	}
+	if resp.UserCode != "WRAP-TEST" {
+		t.Errorf("expected user_code 'WRAP-TEST', got '%s'", resp.UserCode)
+	}
+	if resp.VerificationURI != "https://autopus.co/device" {
+		t.Errorf("expected verification_uri 'https://autopus.co/device', got '%s'", resp.VerificationURI)
+	}
+}
+
 func TestRequestDeviceCode_ServerError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -301,6 +325,43 @@ func TestPollDeviceToken_WithWorkspaces(t *testing.T) {
 	}
 	if resp.Workspaces[0].Slug != "my-workspace" {
 		t.Errorf("expected first workspace slug 'my-workspace', got '%s'", resp.Workspaces[0].Slug)
+	}
+}
+
+func TestPollDeviceToken_WrappedResponse(t *testing.T) {
+	// 백엔드 표준 래핑 응답: {"success":true,"data":{...}}
+	var callCount atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count := callCount.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+
+		if count < 2 {
+			// 에러 응답은 래핑 없음 (RFC 8628)
+			_, _ = w.Write([]byte(`{"error":"authorization_pending"}`))
+		} else {
+			// 성공 응답은 래핑 있음
+			_, _ = w.Write([]byte(`{"success":true,"data":{"access_token":"wrapped-token","refresh_token":"wrapped-refresh","token_type":"Bearer","expires_in":3600,"user_email":"test@autopus.co"}}`))
+		}
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	resp, err := PollDeviceToken(ctx, server.URL, "test-device-code", 1, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if resp.AccessToken != "wrapped-token" {
+		t.Errorf("expected access_token 'wrapped-token', got '%s'", resp.AccessToken)
+	}
+	if resp.RefreshToken != "wrapped-refresh" {
+		t.Errorf("expected refresh_token 'wrapped-refresh', got '%s'", resp.RefreshToken)
+	}
+	if resp.UserEmail != "test@autopus.co" {
+		t.Errorf("expected user_email 'test@autopus.co', got '%s'", resp.UserEmail)
 	}
 }
 

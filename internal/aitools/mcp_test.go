@@ -8,19 +8,16 @@ import (
 )
 
 // TestDefaultAutopusMCPServer는 기본 MCP 서버 설정 값을 검증합니다.
+// Plugin Mode 제거 후 독립 바이너리(autopus-mcp-server)를 사용합니다.
 func TestDefaultAutopusMCPServer(t *testing.T) {
 	server := DefaultAutopusMCPServer()
 
-	if server.Command != "autopus-bridge" {
-		t.Errorf("Command = %q, want %q", server.Command, "autopus-bridge")
+	if server.Command != "autopus-mcp-server" {
+		t.Errorf("Command = %q, want %q", server.Command, "autopus-mcp-server")
 	}
 
-	if len(server.Args) != 1 {
-		t.Fatalf("Args 길이 = %d, want 1", len(server.Args))
-	}
-
-	if server.Args[0] != "mcp-serve" {
-		t.Errorf("Args[0] = %q, want %q", server.Args[0], "mcp-serve")
+	if len(server.Args) != 0 {
+		t.Errorf("Args 길이 = %d, want 0 (독립 바이너리는 인자 불필요)", len(server.Args))
 	}
 }
 
@@ -132,8 +129,7 @@ func TestWriteJSONConfig(t *testing.T) {
 			data: map[string]interface{}{
 				"mcpServers": map[string]interface{}{
 					"autopus": map[string]interface{}{
-						"command": "autopus-bridge",
-						"args":    []string{"mcp-serve"},
+						"command": "autopus-mcp-server",
 					},
 				},
 			},
@@ -373,8 +369,7 @@ func TestAddMCPServerToJSON(t *testing.T) {
 			initial:    map[string]interface{}{},
 			serverName: "autopus",
 			server: MCPServerConfig{
-				Command: "autopus-bridge",
-				Args:    []string{"mcp-serve"},
+				Command: "autopus-mcp-server",
 			},
 		},
 		{
@@ -389,8 +384,7 @@ func TestAddMCPServerToJSON(t *testing.T) {
 			},
 			serverName: "autopus",
 			server: MCPServerConfig{
-				Command: "autopus-bridge",
-				Args:    []string{"mcp-serve"},
+				Command: "autopus-mcp-server",
 			},
 		},
 		{
@@ -405,8 +399,7 @@ func TestAddMCPServerToJSON(t *testing.T) {
 			},
 			serverName: "autopus",
 			server: MCPServerConfig{
-				Command: "autopus-bridge",
-				Args:    []string{"mcp-serve"},
+				Command: "autopus-mcp-server",
 			},
 		},
 	}
@@ -431,14 +424,19 @@ func TestAddMCPServerToJSON(t *testing.T) {
 				t.Errorf("command = %v, want %v", serverData["command"], tt.server.Command)
 			}
 
-			// args 확인 (interface{} 슬라이스로 저장됨)
-			args, ok := serverData["args"].([]string)
-			if !ok {
-				t.Fatal("args가 []string 타입이 아닙니다")
-			}
-
-			if len(args) != len(tt.server.Args) {
-				t.Errorf("args 길이 = %d, want %d", len(args), len(tt.server.Args))
+			// args 확인: Args가 비어있으면 args 키가 없어야 함
+			if len(tt.server.Args) == 0 {
+				if _, exists := serverData["args"]; exists {
+					t.Error("Args가 비어있는데 args 키가 존재합니다")
+				}
+			} else {
+				args, ok := serverData["args"].([]string)
+				if !ok {
+					t.Fatal("args가 []string 타입이 아닙니다")
+				}
+				if len(args) != len(tt.server.Args) {
+					t.Errorf("args 길이 = %d, want %d", len(args), len(tt.server.Args))
+				}
 			}
 		})
 	}
