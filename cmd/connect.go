@@ -476,19 +476,30 @@ func initializeProviders(ctx context.Context, cfg *config.Config) (*provider.Reg
 		GeminiAPIKey:       cfg.Providers.Gemini.GetAPIKey(),
 		GeminiDefaultModel: cfg.Providers.Gemini.DefaultModel,
 		GeminiMode:         cfg.Providers.Gemini.GetMode(),
-		GeminiCLIPath:      cfg.Providers.Gemini.GetCLIPath(),
+		GeminiCLIPath:      getProviderCLIPath(cfg.Providers.Gemini, "gemini"),
 		GeminiCLITimeout:   cfg.Providers.Gemini.GetCLITimeout(),
 
 		CodexAPIKey:         cfg.Providers.Codex.GetAPIKey(),
 		CodexDefaultModel:   cfg.Providers.Codex.DefaultModel,
 		CodexMode:           cfg.Providers.Codex.GetMode(),
-		CodexCLIPath:        cfg.Providers.Codex.GetCLIPath(),
+		CodexCLIPath:        getProviderCLIPath(cfg.Providers.Codex, "codex"),
 		CodexCLITimeout:     cfg.Providers.Codex.GetCLITimeout(),
 		CodexApprovalPolicy: cfg.Providers.Codex.GetApprovalPolicy(),
 		CodexChatGPTAuthEnv: cfg.Providers.Codex.ChatGPTAuthEnv,
 	}
 
 	return provider.InitializeRegistry(ctx, registryConfig)
+}
+
+// getProviderCLIPath는 프로바이더별 CLI 바이너리 경로를 반환합니다.
+// config.yaml에 cli_path가 명시적으로 설정된 경우 그 값을 사용하고,
+// 미설정 시 프로바이더별 기본 바이너리 이름을 반환합니다.
+// (config.GetCLIPath()는 모든 프로바이더에 "claude"를 반환하는 버그가 있음)
+func getProviderCLIPath(p config.ProviderConfig, defaultBinary string) string {
+	if p.CLIPath != "" {
+		return p.CLIPath
+	}
+	return defaultBinary
 }
 
 // ConnectionState는 연결 상태를 추적합니다.

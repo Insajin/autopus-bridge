@@ -183,11 +183,25 @@ func parseInspectOutput(output string) (*ContainerInspectResult, error) {
 }
 
 // ContainerInspect는 컨테이너 상태 정보를 조회한다.
+// 컨테이너 시작 직후에는 포트 매핑이 아직 준비되지 않을 수 있으므로
+// nil-safe 템플릿을 사용하고 포트가 준비될 때까지 재시도한다.
 func (c *CLIDockerClient) ContainerInspect(ctx context.Context, containerID string) (*ContainerInspectResult, error) {
-	format := `{{.Id}}|{{.State.Status}}|{{(index (index .NetworkSettings.Ports "9222/tcp") 0).HostPort}}`
-	output, err := c.runCmd(ctx, "inspect", "--format", format, containerID)
-	if err != nil {
-		return nil, fmt.Errorf("컨테이너 조회 실패 (id=%s): %w", containerID[:min(12, len(containerID))], err)
+	format := `{{.Id}}|{{.State.Status}}|{{if index .NetworkSettings.Ports "9222/tcp"}}{{(index (index .NetworkSettings.Ports "9222/tcp") 0).HostPort}}{{else}}PENDING{{end}}`
+
+	shortID := containerID[:min(12, len(containerID))]
+
+	// 포트 매핑 준비를 위해 최대 5회 재시도 (100ms, 200ms, 400ms, 800ms, 1600ms)
+	var output string
+	var err error
+	for attempt := 0; attempt < 5; attempt++ {
+		output, err = c.runCmd(ctx, "inspect", "--format", format, containerID)
+		if err != nil {
+			return nil, fmt.Errorf("컨테이너 조회 실패 (id=%s): %w", shortID, err)
+		}
+		if !strings.Contains(output, "PENDING") {
+			break
+		}
+		time.Sleep(time.Duration(100*(1<<uint(attempt))) * time.Millisecond)
 	}
 
 	result, err := parseInspectOutput(output)

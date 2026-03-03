@@ -315,10 +315,11 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 	progressDone := make(chan struct{})
 	go e.reportProgress(execCtx, task.ExecutionID, progressDone)
 
-	// 프로바이더 실행
+	// 프로바이더 실행 (OpenRouter 접두사 제거: "anthropic/claude-opus-4-6" -> "claude-opus-4-6")
+	execModel := provider.StripProviderPrefix(task.Model)
 	req := provider.ExecuteRequest{
 		Prompt:    task.Prompt,
-		Model:     task.Model,
+		Model:     execModel,
 		MaxTokens: task.MaxTokens,
 		Tools:     task.Tools,
 		WorkDir:   task.WorkDir,
@@ -582,6 +583,12 @@ func (e *TaskError) Error() string {
 // Unwrap은 원본 에러를 반환합니다.
 func (e *TaskError) Unwrap() error {
 	return nil
+}
+
+// IsRetryable은 에러의 재시도 가능 여부를 반환합니다.
+// websocket.retryable 인터페이스를 만족합니다.
+func (e *TaskError) IsRetryable() bool {
+	return e.Retryable
 }
 
 // Ensure TaskExecutor implements websocket.TaskExecutor interface.

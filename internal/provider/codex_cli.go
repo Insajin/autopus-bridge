@@ -12,29 +12,29 @@ import (
 	"time"
 )
 
-// CodexCLIResponse는 codex CLI의 JSON 출력 구조입니다.
-// codex --quiet --output-format json 명령의 출력을 파싱합니다.
-type CodexCLIResponse struct {
-	// Type은 응답 타입입니다 (예: "result").
+// CodexCLILine는 codex CLI의 JSONL 출력 한 줄의 구조입니다.
+// codex exec --json 명령은 여러 줄의 JSONL을 출력합니다.
+// 주요 타입: thread.started, turn.started, item.completed, turn.completed
+type CodexCLILine struct {
 	Type string `json:"type"`
-	// Result는 실행 결과입니다.
-	Result string `json:"result"`
-	// Subtype은 결과 하위 타입입니다.
-	Subtype string `json:"subtype,omitempty"`
-	// CostUSD는 실행 비용(USD)입니다.
-	CostUSD float64 `json:"cost_usd,omitempty"`
-	// DurationMS는 실행 시간(밀리초)입니다.
-	DurationMS int64 `json:"duration_ms,omitempty"`
-	// DurationAPIMS는 API 호출 시간(밀리초)입니다.
-	DurationAPIMS int64 `json:"duration_api_ms,omitempty"`
-	// NumTurns는 대화 턴 수입니다.
-	NumTurns int `json:"num_turns,omitempty"`
-	// SessionID는 세션 ID입니다.
-	SessionID string `json:"session_id,omitempty"`
-	// TotalInputTokens는 총 입력 토큰 수입니다.
-	TotalInputTokens int `json:"total_input_tokens,omitempty"`
-	// TotalOutputTokens는 총 출력 토큰 수입니다.
-	TotalOutputTokens int `json:"total_output_tokens,omitempty"`
+	// item.completed 타입의 아이템 정보
+	Item *CodexCLIItem `json:"item,omitempty"`
+	// turn.completed 타입의 사용량 정보
+	Usage *CodexCLIUsage `json:"usage,omitempty"`
+}
+
+// CodexCLIItem은 item.completed 이벤트의 아이템 구조입니다.
+type CodexCLIItem struct {
+	ID   string `json:"id"`
+	Type string `json:"type"` // "agent_message", "reasoning", "tool_call" 등
+	Text string `json:"text,omitempty"`
+}
+
+// CodexCLIUsage는 turn.completed 이벤트의 토큰 사용량 구조입니다.
+type CodexCLIUsage struct {
+	InputTokens       int `json:"input_tokens,omitempty"`
+	CachedInputTokens int `json:"cached_input_tokens,omitempty"`
+	OutputTokens      int `json:"output_tokens,omitempty"`
 }
 
 // CodexCLIProvider는 codex CLI를 서브프로세스로 실행하는 프로바이더입니다.
@@ -94,8 +94,8 @@ func NewCodexCLIProvider(opts ...CodexCLIProviderOption) (*CodexCLIProvider, err
 		config: ProviderConfig{
 			DefaultModel: "gpt-5-codex",
 		},
-		approvalMode: "auto-edit",
-		defaultArgs:  []string{"--quiet"},
+		approvalMode: "full-auto",
+		defaultArgs:  nil,
 	}
 
 	// 옵션 적용
@@ -159,28 +159,40 @@ func (p *CodexCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*Ex
 	defer cancel()
 
 	// CLI 명령 구성
-	// codex --quiet --output-format json --model <model> --approval-mode <mode> "prompt"
-	args := make([]string, 0, len(p.defaultArgs)+8)
-	args = append(args, p.defaultArgs...)
-	args = append(args,
-		"--output-format", "json",
-		"--model", model,
-		"--approval-mode", p.approvalMode,
-	)
+	// codex exec --json -m <model> --full-auto --skip-git-repo-check [-C <dir>] "prompt"
+	args := []string{"exec", "--json", "-m", model}
+
+	// 승인 모드 설정
+	switch p.approvalMode {
+	case "full-auto":
+		args = append(args, "--full-auto")
+	case "danger-full-access":
+		args = append(args, "--dangerously-bypass-approvals-and-sandbox")
+	default:
+		// workspace-write가 기본 샌드박스 모드
+		args = append(args, "-s", "workspace-write")
+	}
+
+	// git repo 체크 건너뛰기 (브릿지는 임시 작업 디렉토리에서 실행될 수 있음)
+	args = append(args, "--skip-git-repo-check")
+
+	// 작업 디렉토리 설정 (-C 플래그 사용)
+	if req.WorkDir != "" {
+		if _, err := os.Stat(req.WorkDir); err == nil {
+			args = append(args, "-C", req.WorkDir)
+		}
+	}
+
+	// 기본 추가 인자 적용
+	if len(p.defaultArgs) > 0 {
+		args = append(args, p.defaultArgs...)
+	}
 
 	// 프롬프트 추가
 	args = append(args, req.Prompt)
 
 	// 명령 실행
 	cmd := exec.CommandContext(execCtx, p.cliPath, args...)
-
-	// 작업 디렉토리 설정 (존재하는 경우에만)
-	// 서버가 Docker 컨테이너 내부 경로를 보내는 경우 호스트에 없을 수 있음
-	if req.WorkDir != "" {
-		if _, err := os.Stat(req.WorkDir); err == nil {
-			cmd.Dir = req.WorkDir
-		}
-	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -201,72 +213,66 @@ func (p *CodexCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*Ex
 		return nil, fmt.Errorf("%w: %v, stderr: %s", ErrCLIExecution, err, stderr.String())
 	}
 
-	// JSON 출력 파싱
-	// codex CLI는 여러 줄의 JSON을 출력할 수 있으므로 마지막 result 타입을 찾음
+	// JSONL 출력 파싱
+	// codex exec --json은 여러 줄의 JSONL을 출력합니다:
+	// - item.completed (type=agent_message): 에이전트 응답 텍스트
+	// - item.completed (type=reasoning): 추론 과정 (무시)
+	// - turn.completed: 토큰 사용량 정보
 	output := stdout.String()
 	lines := strings.Split(strings.TrimSpace(output), "\n")
 
-	var response *CodexCLIResponse
+	var agentMessages []string
+	var usage *CodexCLIUsage
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
 
-		var parsed CodexCLIResponse
+		var parsed CodexCLILine
 		if err := json.Unmarshal([]byte(line), &parsed); err != nil {
 			continue
 		}
 
-		// result 타입의 응답을 찾음
-		if parsed.Type == "result" {
-			response = &parsed
+		switch parsed.Type {
+		case "item.completed":
+			if parsed.Item != nil && parsed.Item.Type == "agent_message" && parsed.Item.Text != "" {
+				agentMessages = append(agentMessages, parsed.Item.Text)
+			}
+		case "turn.completed":
+			if parsed.Usage != nil {
+				usage = parsed.Usage
+			}
 		}
 	}
 
-	if response == nil {
-		// JSON 파싱 실패 시 전체 출력을 결과로 사용
-		// 토큰 사용량은 추정값 사용 (약 4자당 1토큰)
-		estimatedInputTokens := len(req.Prompt) / 4
-		estimatedOutputTokens := len(output) / 4
+	// 에이전트 메시지 결합
+	resultText := strings.Join(agentMessages, "\n\n")
 
-		return &ExecuteResponse{
-			Output: output,
-			TokenUsage: TokenUsage{
-				InputTokens:  estimatedInputTokens,
-				OutputTokens: estimatedOutputTokens,
-				TotalTokens:  estimatedInputTokens + estimatedOutputTokens,
-			},
-			DurationMs: time.Since(startTime).Milliseconds(),
-			Model:      model,
-			StopReason: "end_turn",
-		}, nil
+	if resultText == "" {
+		// agent_message가 없으면 전체 출력을 결과로 사용
+		resultText = output
 	}
 
 	// 토큰 사용량 설정
-	tokenUsage := TokenUsage{
-		InputTokens:  response.TotalInputTokens,
-		OutputTokens: response.TotalOutputTokens,
-		TotalTokens:  response.TotalInputTokens + response.TotalOutputTokens,
+	tokenUsage := TokenUsage{}
+	if usage != nil {
+		tokenUsage.InputTokens = usage.InputTokens
+		tokenUsage.OutputTokens = usage.OutputTokens
+		tokenUsage.TotalTokens = usage.InputTokens + usage.OutputTokens
 	}
 
-	// 토큰 정보가 없으면 추정값 사용
+	// 토큰 정보가 없으면 추정값 사용 (약 4자당 1토큰)
 	if tokenUsage.TotalTokens == 0 {
 		tokenUsage.InputTokens = len(req.Prompt) / 4
-		tokenUsage.OutputTokens = len(response.Result) / 4
+		tokenUsage.OutputTokens = len(resultText) / 4
 		tokenUsage.TotalTokens = tokenUsage.InputTokens + tokenUsage.OutputTokens
 	}
 
-	// 실행 시간 설정 (CLI 응답 값 또는 실제 측정값)
-	durationMs := response.DurationMS
-	if durationMs == 0 {
-		durationMs = time.Since(startTime).Milliseconds()
-	}
-
 	return &ExecuteResponse{
-		Output:     response.Result,
+		Output:     resultText,
 		TokenUsage: tokenUsage,
-		DurationMs: durationMs,
+		DurationMs: time.Since(startTime).Milliseconds(),
 		Model:      model,
 		StopReason: "end_turn",
 	}, nil

@@ -5,10 +5,14 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
+	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -368,10 +372,101 @@ func (r *Router) executeTask(ctx context.Context, task ws.TaskRequestPayload) {
 	_ = r.client.SendTaskResult(result)
 }
 
-// isRetryableError는 재시도 가능한 에러인지 확인합니다.
+// retryable은 재시도 가능 여부를 노출하는 에러 인터페이스입니다.
+// executor.TaskError 등 Retryable 정보를 포함하는 에러 타입과 호환됩니다.
+type retryable interface {
+	IsRetryable() bool
+}
+
+// isRetryableError는 에러 타입에 따라 재시도 가능 여부를 결정합니다.
+//
+// 재시도 가능:
+//   - 타임아웃 (context.DeadlineExceeded, net.Error.Timeout)
+//   - 일시적 네트워크 장애 (connection reset/refused, io.EOF)
+//   - 서버 에러 (500, 502, 503, 504)
+//   - 레이트 리밋 (429)
+//
+// 재시도 불가:
+//   - 컨텍스트 취소 (context.Canceled) - 의도적 취소
+//   - 인증 실패 (401, 403)
+//   - 잘못된 요청 (400)
+//   - 리소스 없음 (404)
+//   - 유효성 검사 에러
+//   - API 키 미설정
+//   - 프로바이더 미등록
 func isRetryableError(err error) bool {
-	// TODO: 에러 타입에 따라 재시도 가능 여부 결정
-	// 현재는 모든 에러를 재시도 불가로 처리
+	if err == nil {
+		return false
+	}
+
+	// 1. retryable 인터페이스 구현 여부 확인 (executor.TaskError 등)
+	var r retryable
+	if errors.As(err, &r) {
+		return r.IsRetryable()
+	}
+
+	// 2. 컨텍스트 에러 확인
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded) {
+		return true // 타임아웃은 재시도 가능
+	}
+	if errors.Is(err, context.Canceled) {
+		return false // 의도적 취소는 재시도 불가
+	}
+
+	// 3. 네트워크 에러 확인
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		// 타임아웃은 재시도 가능
+		if netErr.Timeout() {
+			return true
+		}
+		// 그 외 네트워크 에러도 일시적일 가능성 높음
+		return true
+	}
+
+	// 4. 연결 끊김 에러 확인 (io.EOF, io.ErrUnexpectedEOF)
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	// 5. 에러 메시지 기반 분류 (래핑된 에러 또는 문자열 기반 에러)
+	errStr := strings.ToLower(err.Error())
+
+	// 5a. 재시도 불가 패턴 우선 확인 (보수적 접근)
+	nonRetryablePatterns := []string{
+		"401", "403", "404", "400",
+		"unauthorized", "forbidden", "not found", "bad request",
+		"invalid", "validation",
+		"api 키", "api key", "no api key",
+		"프로바이더를 찾을 수 없", "provider not found",
+		"sandbox", "permission denied",
+	}
+	for _, pattern := range nonRetryablePatterns {
+		if strings.Contains(errStr, pattern) {
+			return false
+		}
+	}
+
+	// 5b. 재시도 가능 패턴 확인
+	retryablePatterns := []string{
+		"500", "502", "503", "504", "429",
+		"timeout", "timed out",
+		"connection refused", "connection reset",
+		"broken pipe", "no such host",
+		"temporary", "unavailable",
+		"server error", "server_error",
+		"internal", "overloaded",
+		"rate limit", "rate_limit", "레이트 리밋",
+		"too many requests",
+		"eof",
+	}
+	for _, pattern := range retryablePatterns {
+		if strings.Contains(errStr, pattern) {
+			return true
+		}
+	}
+
+	// 6. 기본값: 재시도 불가 (보수적)
 	return false
 }
 

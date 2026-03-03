@@ -17,14 +17,14 @@ import (
 
 // CLI 관련 에러 정의
 var (
-	// ErrCLINotFound는 claude CLI 바이너리를 찾을 수 없을 때 반환됩니다.
-	ErrCLINotFound = errors.New("claude CLI 바이너리를 찾을 수 없습니다")
+	// ErrCLINotFound는 CLI 바이너리를 찾을 수 없을 때 반환됩니다.
+	ErrCLINotFound = errors.New("CLI 바이너리를 찾을 수 없습니다")
 
 	// ErrCLITimeout은 CLI 실행이 타임아웃되었을 때 반환됩니다.
-	ErrCLITimeout = errors.New("claude CLI 실행 타임아웃")
+	ErrCLITimeout = errors.New("CLI 실행 타임아웃")
 
 	// ErrCLIExecution은 CLI 실행 중 에러가 발생했을 때 반환됩니다.
-	ErrCLIExecution = errors.New("claude CLI 실행 실패")
+	ErrCLIExecution = errors.New("CLI 실행 실패")
 )
 
 // ClaudeCLIResponse는 claude CLI의 JSON 출력 구조입니다.
@@ -188,6 +188,11 @@ func (p *ClaudeCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*E
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
+	// Claude Code 세션 감지 환경변수를 제거하여 하위 Claude CLI 실행을 허용한다.
+	// 브릿지가 Claude Code 세션 내에서 실행될 때 이 변수들이 설정되어 있으면
+	// 하위 프로세스에서 "cannot be launched inside another Claude Code session" 에러가 발생한다.
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
+
 	err := cmd.Run()
 
 	// 컨텍스트 취소 확인
@@ -321,6 +326,9 @@ func (p *ClaudeCLIProvider) ExecuteStreaming(ctx context.Context, req ExecuteReq
 			cmd.Dir = req.WorkDir
 		}
 	}
+
+	// Claude Code 세션 감지 환경변수를 제거하여 하위 Claude CLI 실행을 허용한다.
+	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")
 
 	// StdoutPipe로 실시간 출력 읽기
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -483,4 +491,24 @@ func IsCLIAvailable(cliPath string) bool {
 	}
 	_, err := exec.LookPath(cliPath)
 	return err == nil
+}
+
+// filterEnv는 환경변수 슬라이스에서 지정된 키를 제거한 새 슬라이스를 반환한다.
+// 브릿지가 Claude Code 세션 내에서 실행될 때, CLAUDE_CODE_INSIDE 등의
+// 환경변수를 제거하여 하위 CLI 프로세스가 정상 실행될 수 있게 한다.
+func filterEnv(env []string, keys ...string) []string {
+	filtered := make([]string, 0, len(env))
+	for _, e := range env {
+		skip := false
+		for _, key := range keys {
+			if strings.HasPrefix(e, key+"=") {
+				skip = true
+				break
+			}
+		}
+		if !skip {
+			filtered = append(filtered, e)
+		}
+	}
+	return filtered
 }
