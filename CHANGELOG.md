@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-03-03
+
+### Removed
+
+- Plugin Mode (`mcp-serve`) 완전 제거 (SPEC-LEGACY-CLI-001)
+  - `cmd/mcp-serve.go` 서브커맨드 삭제
+  - WebSocket 핸들러에서 MCPServe 관련 함수 5개 및 Router 필드 5개 제거
+  - MCP 서버 커맨드를 `autopus-mcp-server` standalone 바이너리로 전환
+  - MCPServe 핸들러 단위 테스트 및 통합 테스트 삭제
+
+### Fixed
+
+- 멀티프로바이더 실행 안정화 및 플랫폼 연동 버그 수정
+  - `claude_cli`: CLAUDECODE/CLAUDE_CODE_ENTRYPOINT 환경변수 필터링 (세션 충돌 방지)
+  - `codex_cli`: `exec --json` JSONL 파싱 전환 및 `--skip-git-repo-check` 추가
+  - `docker_client_cli`: inspect nil-safe 템플릿 + 포트 매핑 재시도 로직
+  - `connect`: 프로바이더별 CLI 경로 기본값 분리 (gemini/codex 바이너리명 구분)
+  - `executor/task`: OpenRouter 접두사 제거 및 `TaskError.IsRetryable` 구현
+  - `websocket/handler`: 핸들러 테스트 추가
+- Codex 인증 커맨드 `codex auth` -> `codex login` 수정
+- OpenRouter 형식 모델 라우팅 지원 (`openai/o3-mini`, `anthropic/claude-sonnet-4-6`)
+
+### Changed
+
+- Device Auth 백엔드 래핑 응답 파싱 개선
+
 ## [1.7.0] - 2026-02-26
 
 ### Added
@@ -143,6 +169,8 @@ Previously located at `github.com/anthropics/acos/cmd/local-agent-bridge`.
 - Protocol types extracted to separate SDK: `github.com/insajin/autopus-agent-protocol`
 - See [docs/MIGRATION.md](docs/MIGRATION.md) for upgrade instructions
 
+[1.8.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.8.0
+[1.7.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.7.0
 [1.5.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.5.0
 [1.4.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.4.0
 [1.3.1]: https://github.com/insajin/autopus-bridge/releases/tag/v1.3.1
