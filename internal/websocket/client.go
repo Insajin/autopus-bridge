@@ -18,8 +18,35 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/insajin/autopus-agent-protocol"
+	ws "github.com/insajin/autopus-agent-protocol"
 )
+
+// Sentinel errors for authentication failures.
+var (
+	// ErrAuthExpired indicates the JWT token has expired.
+	ErrAuthExpired = errors.New("authentication token expired")
+	// ErrAuthInvalid indicates the JWT token is invalid (malformed, wrong signature, etc.).
+	ErrAuthInvalid = errors.New("authentication token invalid")
+)
+
+// isAuthError는 에러 메시지가 인증 관련 에러인지 판단합니다.
+func isAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	authPatterns := []string{
+		"인증 실패", "인증 거부", "authentication failed",
+		"authentication error", "unauthorized",
+		"token expired", "토큰 만료", "토큰이 만료", "서버 인증",
+	}
+	for _, p := range authPatterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
 
 // ReconnectionHandler is an optional interface that message handlers can
 // implement to receive notifications when the WebSocket connection is
@@ -151,6 +178,9 @@ type Client struct {
 
 	// tokenRefreshFn은 재연결 전 토큰을 갱신하는 콜백입니다.
 	tokenRefreshFn func() (string, error)
+
+	// onAuthFailureFn은 인증 실패로 재연결이 중단될 때 호출되는 콜백입니다.
+	onAuthFailureFn func(error)
 }
 
 // ClientOption은 Client 설정 옵션입니다.
@@ -339,7 +369,18 @@ func (c *Client) waitForAuthAck() error {
 	}
 
 	if !ackPayload.Success {
-		return fmt.Errorf("서버 인증 거부: %s", ackPayload.Message)
+		switch ackPayload.ErrorCode {
+		case ws.AuthErrorTokenExpired:
+			return ErrAuthExpired
+		case ws.AuthErrorTokenInvalid:
+			return ErrAuthInvalid
+		default:
+			// 이전 서버 호환: ErrorCode가 없으면 문자열 매칭 폴백
+			if isAuthError(fmt.Errorf("%s", ackPayload.Message)) {
+				return ErrAuthExpired
+			}
+			return fmt.Errorf("서버 인증 거부: %s", ackPayload.Message)
+		}
 	}
 
 	// SEC-P2-02: HMAC 공유 시크릿 추출 및 설정
@@ -697,6 +738,11 @@ func (c *Client) SetTokenRefreshFunc(fn func() (string, error)) {
 	c.tokenRefreshFn = fn
 }
 
+// SetOnAuthFailure는 인증 실패로 재연결이 중단될 때 호출되는 콜백을 설정합니다.
+func (c *Client) SetOnAuthFailure(fn func(error)) {
+	c.onAuthFailureFn = fn
+}
+
 
 // handleDisconnect는 연결 끊김을 처리하고 재연결을 시도합니다.
 // REQ-E-08: 지수 백오프 재연결
@@ -757,6 +803,15 @@ func (c *Client) handleDisconnect(ctx context.Context, reason string) {
 			return
 		} else {
 			log.Printf("[STABILITY] 재연결 실패 (시도 %d): %v", attempt, err)
+			// 인증 에러 → 무한 재연결 중단
+			if errors.Is(err, ErrAuthExpired) || errors.Is(err, ErrAuthInvalid) {
+				log.Printf("[STABILITY] 인증 실패로 재연결 중단")
+				c.state.Store(int32(StateDisconnected))
+				if c.onAuthFailureFn != nil {
+					c.onAuthFailureFn(err)
+				}
+				return
+			}
 		}
 	}
 

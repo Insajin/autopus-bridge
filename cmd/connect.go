@@ -7,6 +7,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/insajin/autopus-agent-protocol"
+	embeddedDocker "github.com/insajin/autopus-bridge/docker"
 	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/computeruse"
 	"github.com/insajin/autopus-bridge/internal/config"
@@ -164,13 +166,14 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if cfg.ComputerUse.IsContainerMode() {
 		poolCtx, poolCancel := context.WithTimeout(ctx, 60*time.Second)
 		pool, poolErr := computeruse.InitContainerPool(poolCtx, computeruse.ComputerUseConfigInput{
-			MaxContainers:   cfg.ComputerUse.MaxContainers,
-			WarmPoolSize:    cfg.ComputerUse.WarmPoolSize,
-			Image:           cfg.ComputerUse.Image,
-			ContainerMemory: cfg.ComputerUse.ContainerMemory,
-			ContainerCPU:    cfg.ComputerUse.ContainerCPU,
-			IdleTimeout:     cfg.ComputerUse.IdleTimeout,
-			Network:         cfg.ComputerUse.Network,
+			MaxContainers:      cfg.ComputerUse.MaxContainers,
+			WarmPoolSize:       cfg.ComputerUse.WarmPoolSize,
+			Image:              cfg.ComputerUse.Image,
+			ContainerMemory:    cfg.ComputerUse.ContainerMemory,
+			ContainerCPU:       cfg.ComputerUse.ContainerCPU,
+			IdleTimeout:        cfg.ComputerUse.IdleTimeout,
+			Network:            cfg.ComputerUse.Network,
+			EmbeddedDockerfile: embeddedDocker.ChromiumSandboxDockerfile,
 		})
 		poolCancel()
 
@@ -231,6 +234,32 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		websocket.WithProviderCapabilities(providerCaps),
 		websocket.WithReconnectStrategy(reconnectStrategy),
 	)
+
+	// 인증 실패 콜백 등록: 토큰 만료 시 자동 재인증 시도
+	client.SetOnAuthFailure(func(authErr error) {
+		if errors.Is(authErr, websocket.ErrAuthExpired) {
+			fmt.Println("\n  세션 토큰이 만료되었습니다. 재인증을 시도합니다...")
+			newCreds, reAuthErr := performBrowserAuthWithFallback()
+			if reAuthErr != nil {
+				fmt.Println("  재인증 실패. 'lab login'을 실행해 주세요.")
+				cancel()
+				return
+			}
+			client.UpdateToken(newCreds.AccessToken)
+			fmt.Printf("  재인증 성공: %s\n", newCreds.UserEmail)
+			go func() {
+				if connErr := client.Connect(ctx); connErr != nil {
+					logger.Error().Err(connErr).Msg("재인증 후 재연결 실패")
+					cancel()
+				} else {
+					client.StartHeartbeat(ctx)
+				}
+			}()
+		} else {
+			fmt.Println("\n  인증 실패. 'lab login'으로 다시 로그인해 주세요.")
+			cancel()
+		}
+	})
 
 	// 작업 실행기 생성 (client를 sender로 사용)
 	taskExecutor := executor.NewTaskExecutor(

@@ -72,6 +72,9 @@ type DockerClient interface {
 	// ImagePull은 이미지를 풀한다.
 	ImagePull(ctx context.Context, imageRef string) (io.ReadCloser, error)
 
+	// ImageBuild는 Dockerfile 내용으로 이미지를 로컬 빌드한다.
+	ImageBuild(ctx context.Context, imageRef string, dockerfile []byte) error
+
 	// Ping은 Docker 데몬 연결을 확인한다.
 	Ping(ctx context.Context) error
 
@@ -101,13 +104,22 @@ type ContainerInspectResult struct {
 
 // ContainerManager는 Docker 컨테이너의 생명주기를 관리한다.
 type ContainerManager struct {
-	client  DockerClient
-	config  ContainerConfig
-	mu      sync.Mutex
+	client             DockerClient
+	config             ContainerConfig
+	embeddedDockerfile []byte // 내장 Dockerfile (pull 실패 시 로컬 빌드 폴백용)
+	mu                 sync.Mutex
+}
+
+// ManagerOption은 ContainerManager 생성 옵션이다.
+type ManagerOption func(*ContainerManager)
+
+// WithEmbeddedDockerfile은 pull 실패 시 로컬 빌드에 사용할 내장 Dockerfile을 설정한다.
+func WithEmbeddedDockerfile(df []byte) ManagerOption {
+	return func(cm *ContainerManager) { cm.embeddedDockerfile = df }
 }
 
 // NewContainerManager는 DockerClient와 설정으로 ContainerManager를 생성한다.
-func NewContainerManager(client DockerClient, cfg ContainerConfig) (*ContainerManager, error) {
+func NewContainerManager(client DockerClient, cfg ContainerConfig, opts ...ManagerOption) (*ContainerManager, error) {
 	if client == nil {
 		return nil, fmt.Errorf("docker client는 nil일 수 없습니다")
 	}
@@ -120,10 +132,15 @@ func NewContainerManager(client DockerClient, cfg ContainerConfig) (*ContainerMa
 		return nil, fmt.Errorf("docker 데몬 연결 실패: %w", err)
 	}
 
-	return &ContainerManager{
+	cm := &ContainerManager{
 		client: client,
 		config: cfg,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(cm)
+	}
+
+	return cm, nil
 }
 
 // Create는 새로운 샌드박스 컨테이너를 생성하고 시작한다.
@@ -247,27 +264,37 @@ func (cm *ContainerManager) EnsureNetwork(ctx context.Context) error {
 	return nil
 }
 
-// EnsureImage는 Docker 이미지가 로컬에 없으면 풀한다.
+// EnsureImage는 Docker 이미지가 로컬에 없으면 풀하고,
+// pull 실패 시 내장 Dockerfile로 로컬 빌드를 시도한다.
 func (cm *ContainerManager) EnsureImage(ctx context.Context) error {
 	// 이미지 존재 여부 확인
 	if err := cm.client.ImageInspect(ctx, cm.config.Image); err == nil {
 		return nil // 이미 존재
 	}
 
-	// 이미지 풀
+	// 1차: pull 시도
 	log.Printf("[computer-use] 이미지 풀 시작: %s", cm.config.Image)
-	reader, err := cm.client.ImagePull(ctx, cm.config.Image)
-	if err != nil {
-		return fmt.Errorf("이미지 풀 실패: %w", err)
+	reader, pullErr := cm.client.ImagePull(ctx, cm.config.Image)
+	if pullErr == nil {
+		defer reader.Close()
+		if _, err := io.Copy(io.Discard, reader); err == nil {
+			log.Printf("[computer-use] 이미지 풀 완료: %s", cm.config.Image)
+			return nil
+		}
 	}
-	defer reader.Close()
+	log.Printf("[computer-use] 이미지 풀 실패: %v", pullErr)
 
-	// 풀 완료까지 읽기 (진행 상태 소비)
-	if _, err := io.Copy(io.Discard, reader); err != nil {
-		return fmt.Errorf("이미지 풀 스트림 읽기 실패: %w", err)
+	// 2차: 내장 Dockerfile로 로컬 빌드
+	if len(cm.embeddedDockerfile) == 0 {
+		return fmt.Errorf("이미지 풀 실패, 내장 Dockerfile 없음: %w", pullErr)
 	}
 
-	log.Printf("[computer-use] 이미지 풀 완료: %s", cm.config.Image)
+	log.Printf("[computer-use] 내장 Dockerfile로 로컬 빌드 시도")
+	if buildErr := cm.client.ImageBuild(ctx, cm.config.Image, cm.embeddedDockerfile); buildErr != nil {
+		return fmt.Errorf("이미지 풀/빌드 모두 실패 (pull: %v, build: %v)", pullErr, buildErr)
+	}
+
+	log.Printf("[computer-use] 로컬 빌드 완료: %s", cm.config.Image)
 	return nil
 }
 

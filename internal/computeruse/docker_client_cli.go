@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -263,6 +265,24 @@ func (c *CLIDockerClient) ImagePull(ctx context.Context, imageRef string) (io.Re
 		ReadCloser: stdout,
 		cmd:        cmd,
 	}, nil
+}
+
+// ImageBuild는 Dockerfile 내용으로 이미지를 로컬 빌드한다.
+// 임시 디렉토리에 Dockerfile을 작성하고 docker build를 실행한다.
+func (c *CLIDockerClient) ImageBuild(ctx context.Context, imageRef string, dockerfile []byte) error {
+	tmpDir, err := os.MkdirTemp("", "autopus-docker-build-*")
+	if err != nil {
+		return fmt.Errorf("임시 디렉토리 생성 실패: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), dockerfile, 0644); err != nil {
+		return fmt.Errorf("Dockerfile 쓰기 실패: %w", err)
+	}
+
+	log.Printf("[computer-use] 로컬 이미지 빌드 시작: %s", imageRef)
+	_, err = c.runCmd(ctx, "build", "-t", imageRef, tmpDir)
+	return err
 }
 
 // pullReadCloser는 docker pull 프로세스의 stdout을 래핑한다.

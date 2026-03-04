@@ -11,13 +11,14 @@ import (
 // ComputerUseConfigInput은 외부 설정(config.ComputerUseConfig)으로부터 매핑되는 입력 구조체이다.
 // cmd/connect.go 등 호출측에서 config 값을 이 구조체에 채워 InitContainerPool에 전달한다.
 type ComputerUseConfigInput struct {
-	MaxContainers   int    // 최대 동시 컨테이너 수
-	WarmPoolSize    int    // 웜 풀 크기
-	Image           string // Docker 이미지 이름
-	ContainerMemory string // 메모리 제한 (예: "512m", "1g")
-	ContainerCPU    string // CPU 할당량 (예: "1.0", "0.5")
-	IdleTimeout     string // 유휴 타임아웃 (예: "5m", "30s")
-	Network         string // Docker 네트워크 이름
+	MaxContainers      int    // 최대 동시 컨테이너 수
+	WarmPoolSize       int    // 웜 풀 크기
+	Image              string // Docker 이미지 이름
+	ContainerMemory    string // 메모리 제한 (예: "512m", "1g")
+	ContainerCPU       string // CPU 할당량 (예: "1.0", "0.5")
+	IdleTimeout        string // 유휴 타임아웃 (예: "5m", "30s")
+	Network            string // Docker 네트워크 이름
+	EmbeddedDockerfile []byte // 내장 Dockerfile (pull 실패 시 로컬 빌드용)
 }
 
 // InitContainerPool은 설정으로부터 컨테이너 풀을 초기화한다.
@@ -57,7 +58,11 @@ func InitContainerPool(ctx context.Context, cuCfg ComputerUseConfigInput) (*Cont
 	}
 
 	// 3단계: ContainerManager 생성 (내부에서 Docker 데몬 Ping 수행)
-	manager, err := NewContainerManager(client, containerCfg)
+	var opts []ManagerOption
+	if len(cuCfg.EmbeddedDockerfile) > 0 {
+		opts = append(opts, WithEmbeddedDockerfile(cuCfg.EmbeddedDockerfile))
+	}
+	manager, err := NewContainerManager(client, containerCfg, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("컨테이너 매니저 생성 실패: %w", err)
 	}
