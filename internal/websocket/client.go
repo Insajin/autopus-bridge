@@ -29,6 +29,14 @@ var (
 	ErrAuthInvalid = errors.New("authentication token invalid")
 )
 
+const (
+	// closeCodeReplacedByNewConnection indicates this bridge was replaced by a newer
+	// connection for the same user.
+	closeCodeReplacedByNewConnection = 4001
+	// closeReasonReplacedByNewConnection is used as close text by the backend.
+	closeReasonReplacedByNewConnection = "replaced_by_new_connection"
+)
+
 // isAuthError는 에러 메시지가 인증 관련 에러인지 판단합니다.
 func isAuthError(err error) bool {
 	if err == nil {
@@ -46,6 +54,20 @@ func isAuthError(err error) bool {
 		}
 	}
 	return false
+}
+
+// isReplacedByNewConnectionClose는 서버가 "새 연결로 교체됨"을 통지한 close 에러인지 판단합니다.
+func isReplacedByNewConnectionClose(err error) bool {
+	var closeErr *websocket.CloseError
+	if !errors.As(err, &closeErr) {
+		return false
+	}
+
+	if closeErr.Code == closeCodeReplacedByNewConnection {
+		return true
+	}
+
+	return strings.Contains(strings.ToLower(closeErr.Text), closeReasonReplacedByNewConnection)
 }
 
 // ReconnectionHandler is an optional interface that message handlers can
@@ -680,6 +702,13 @@ func (c *Client) readLoop(ctx context.Context) {
 		// 종료 시 conn.Close()로 ReadMessage()를 unblock합니다.
 		_, data, err := conn.ReadMessage()
 		if err != nil {
+			// 동일 사용자의 새 브리지 연결로 교체된 경우에는 재연결하지 않고 종료합니다.
+			if isReplacedByNewConnectionClose(err) {
+				log.Printf("[STABILITY] 서버가 연결 교체를 통지했습니다. 재연결을 중단합니다: %v", err)
+				_ = c.Disconnect(closeReasonReplacedByNewConnection)
+				return
+			}
+
 			// 모든 read 에러는 연결 끊김으로 처리 (재시도 금지)
 			go c.handleDisconnect(ctx, fmt.Sprintf("연결 에러: %v", err))
 			return
@@ -742,7 +771,6 @@ func (c *Client) SetTokenRefreshFunc(fn func() (string, error)) {
 func (c *Client) SetOnAuthFailure(fn func(error)) {
 	c.onAuthFailureFn = fn
 }
-
 
 // handleDisconnect는 연결 끊김을 처리하고 재연결을 시도합니다.
 // REQ-E-08: 지수 백오프 재연결

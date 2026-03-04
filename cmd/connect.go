@@ -7,10 +7,14 @@ package cmd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +40,14 @@ var (
 	token          string
 	connectTimeout int
 )
+
+const connectLockFileName = "connect.lock"
+
+// connectLock는 connect 단일 인스턴스 실행을 보장하기 위한 락 파일 핸들입니다.
+type connectLock struct {
+	path string
+	pid  int
+}
 
 // connectCmd는 서버에 연결하는 명령어입니다.
 // REQ-E-01: connect 명령 시 WebSocket 연결 수립 및 agent_connect 메시지 전송
@@ -65,6 +77,13 @@ func init() {
 
 // runConnect는 connect 명령의 실행 로직입니다.
 func runConnect(cmd *cobra.Command, args []string) error {
+	// 단일 인스턴스 보장: 기존 connect 프로세스가 있으면 중복 실행 방지
+	lock, err := acquireConnectLock()
+	if err != nil {
+		return err
+	}
+	defer lock.Release()
+
 	// 설정 로드
 	cfg, err := config.Load()
 	if err != nil {
@@ -680,7 +699,118 @@ func saveConnectionStatus(connState *ConnectionState) {
 
 // clearConnectionStatus는 연결 상태 파일을 삭제합니다.
 func clearConnectionStatus() {
+	statusFile := getStatusFilePath()
+	if statusFile != "" {
+		if data, err := os.ReadFile(statusFile); err == nil {
+			var status StatusInfo
+			if err := json.Unmarshal(data, &status); err == nil {
+				if status.PID > 0 && status.PID != os.Getpid() {
+					logger.Warn().
+						Int("status_pid", status.PID).
+						Int("current_pid", os.Getpid()).
+						Msg("다른 프로세스의 상태 파일은 삭제하지 않음")
+					return
+				}
+			}
+		}
+	}
+
 	if err := ClearStatus(); err != nil {
 		logger.Warn().Err(err).Msg("상태 파일 삭제 실패")
 	}
+}
+
+// acquireConnectLock은 connect.lock을 생성해 connect 단일 인스턴스를 보장합니다.
+func acquireConnectLock() (*connectLock, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, fmt.Errorf("홈 디렉토리 조회 실패: %w", err)
+	}
+	if err := config.EnsureConfigDir(); err != nil {
+		return nil, fmt.Errorf("설정 디렉토리 생성 실패: %w", err)
+	}
+
+	lockPath := filepath.Join(home, ".config", "autopus", connectLockFileName)
+	pid := os.Getpid()
+	pidStr := strconv.Itoa(pid)
+
+	createLock := func() error {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+
+		if _, err := f.WriteString(pidStr + "\n"); err != nil {
+			_ = os.Remove(lockPath)
+			return fmt.Errorf("lock 파일 쓰기 실패: %w", err)
+		}
+		return nil
+	}
+
+	if err := createLock(); err != nil {
+		if !os.IsExist(err) {
+			return nil, fmt.Errorf("connect lock 생성 실패: %w", err)
+		}
+
+		existingPID, pidErr := readLockPID(lockPath)
+		if pidErr == nil && existingPID > 0 && isProcessRunning(existingPID) {
+			return nil, fmt.Errorf("이미 실행 중인 bridge 연결 프로세스가 있습니다 (PID: %d)", existingPID)
+		}
+		if pidErr != nil {
+			// parse 불가 상태는 동시 생성 중일 수 있으므로 안전하게 실패 처리
+			return nil, fmt.Errorf("connect lock 파일이 사용 중입니다: %w", pidErr)
+		}
+
+		// stale lock 정리 후 1회 재시도
+		if err := os.Remove(lockPath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("stale connect lock 삭제 실패: %w", err)
+		}
+		if err := createLock(); err != nil {
+			if os.IsExist(err) {
+				if existingPID, pidErr := readLockPID(lockPath); pidErr == nil && existingPID > 0 {
+					return nil, fmt.Errorf("이미 실행 중인 bridge 연결 프로세스가 있습니다 (PID: %d)", existingPID)
+				}
+			}
+			return nil, fmt.Errorf("connect lock 생성 재시도 실패: %w", err)
+		}
+	}
+
+	return &connectLock{
+		path: lockPath,
+		pid:  pid,
+	}, nil
+}
+
+// Release는 현재 프로세스가 소유한 connect.lock을 해제합니다.
+func (l *connectLock) Release() {
+	if l == nil || l.path == "" {
+		return
+	}
+
+	existingPID, err := readLockPID(l.path)
+	if err == nil && existingPID > 0 && existingPID != l.pid {
+		return
+	}
+	_ = os.Remove(l.path)
+}
+
+// readLockPID는 connect.lock에 기록된 PID를 반환합니다.
+func readLockPID(path string) (int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+
+	text := strings.TrimSpace(string(data))
+	if text == "" {
+		return 0, errors.New("lock 파일이 비어 있습니다")
+	}
+
+	pid, err := strconv.Atoi(text)
+	if err != nil {
+		return 0, fmt.Errorf("lock PID 파싱 실패: %w", err)
+	}
+
+	return pid, nil
 }
