@@ -102,6 +102,8 @@ type Client struct {
 	version string
 	// capabilities는 지원하는 CLI 목록입니다.
 	capabilities []string
+	// providerCapabilities는 지원하는 프로바이더 목록입니다 (SPEC-BRIDGE-GATEWAY-001).
+	providerCapabilities map[string]bool
 
 	// conn은 WebSocket 연결입니다.
 	conn *websocket.Conn
@@ -165,6 +167,13 @@ func WithReconnectStrategy(strategy *ReconnectStrategy) ClientOption {
 func WithCapabilities(capabilities []string) ClientOption {
 	return func(c *Client) {
 		c.capabilities = capabilities
+	}
+}
+
+// WithProviderCapabilities는 지원하는 프로바이더 목록을 설정합니다 (SPEC-BRIDGE-GATEWAY-001).
+func WithProviderCapabilities(caps map[string]bool) ClientOption {
+	return func(c *Client) {
+		c.providerCapabilities = caps
 	}
 }
 
@@ -352,10 +361,11 @@ func (c *Client) sendConnect() error {
 	c.lastExecIDMu.RUnlock()
 
 	payload := ws.AgentConnectPayload{
-		Version:      c.version,
-		Capabilities: c.capabilities,
-		LastExecID:   lastExecID,
-		Token:        c.token,
+		Version:              c.version,
+		Capabilities:         c.capabilities,
+		ProviderCapabilities: c.providerCapabilities,
+		LastExecID:           lastExecID,
+		Token:                c.token,
 	}
 
 	// sendMessage 대신 직접 전송 (연결 과정 중이므로)
@@ -639,6 +649,12 @@ func (c *Client) readLoop(ctx context.Context) {
 			continue
 		}
 
+		// agent_response_request는 플랫 JSON (envelope 미사용)으로 수신되므로
+		// 원시 데이터를 Payload에 저장하여 핸들러에서 직접 파싱할 수 있게 한다.
+		if msg.Type == ws.AgentMsgAgentResponseReq && len(msg.Payload) == 0 {
+			msg.Payload = data
+		}
+
 		// 하트비트 응답 처리
 		if msg.Type == ws.AgentMsgHeartbeat {
 			c.lastHeartbeatMu.Lock()
@@ -827,6 +843,23 @@ func (c *Client) SendMCPHealthReport(payload ws.MCPHealthReportPayload) error {
 // SendToolApprovalRequest는 도구 승인 요청을 서버로 전송합니다 (SPEC-INTERACTIVE-CLI-001).
 func (c *Client) SendToolApprovalRequest(payload ws.ToolApprovalRequestPayload) error {
 	return c.sendMessage(ws.AgentMsgToolApprovalReq, payload)
+}
+
+// SendAgentResponseStream은 에이전트 응답 스트리밍 청크를 서버로 전송합니다 (SPEC-BRIDGE-GATEWAY-001).
+func (c *Client) SendAgentResponseStream(payload ws.AgentResponseStreamPayload) error {
+	return c.sendMessage(ws.AgentMsgAgentResponseStream, payload)
+}
+
+// SendAgentResponseComplete는 에이전트 응답 완료를 서버로 전송합니다 (SPEC-BRIDGE-GATEWAY-001).
+func (c *Client) SendAgentResponseComplete(payload ws.AgentResponseCompletePayload) error {
+	c.SetLastExecID(payload.ExecutionID)
+	return c.sendMessage(ws.AgentMsgAgentResponseComplete, payload)
+}
+
+// SendAgentResponseError는 에이전트 응답 에러를 서버로 전송합니다 (SPEC-BRIDGE-GATEWAY-001).
+func (c *Client) SendAgentResponseError(payload ws.AgentResponseErrorPayload) error {
+	c.SetLastExecID(payload.ExecutionID)
+	return c.sendMessage(ws.AgentMsgAgentResponseError, payload)
 }
 
 // sendMessageWithID는 특정 ID를 가진 메시지를 생성하여 전송합니다.

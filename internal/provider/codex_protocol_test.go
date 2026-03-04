@@ -311,7 +311,7 @@ func TestCodexProtocol_DomainTypes_Roundtrip(t *testing.T) {
 
 	t.Run("AccountLoginParams_APIKey", func(t *testing.T) {
 		original := protocol.AccountLoginParams{
-			Method: "apiKey",
+			Type:   "apiKey",
 			APIKey: "sk-test-key-123",
 		}
 
@@ -325,8 +325,8 @@ func TestCodexProtocol_DomainTypes_Roundtrip(t *testing.T) {
 			t.Fatalf("역직렬화 실패: %v", err)
 		}
 
-		if got.Method != original.Method {
-			t.Errorf("Method: got %q, want %q", got.Method, original.Method)
+		if got.Type != original.Type {
+			t.Errorf("Type: got %q, want %q", got.Type, original.Type)
 		}
 		if got.APIKey != original.APIKey {
 			t.Errorf("APIKey: got %q, want %q", got.APIKey, original.APIKey)
@@ -334,7 +334,12 @@ func TestCodexProtocol_DomainTypes_Roundtrip(t *testing.T) {
 	})
 
 	t.Run("InitializeParams_and_Result", func(t *testing.T) {
-		params := protocol.InitializeParams{ClientVersion: "1.0.0", ClientName: "test-client"}
+		params := protocol.InitializeParams{
+			ClientInfo: protocol.ClientInfo{
+				Name:    "test-client",
+				Version: "1.0.0",
+			},
+		}
 		data, err := json.Marshal(params)
 		if err != nil {
 			t.Fatalf("직렬화 실패: %v", err)
@@ -343,11 +348,11 @@ func TestCodexProtocol_DomainTypes_Roundtrip(t *testing.T) {
 		if err := json.Unmarshal(data, &gotParams); err != nil {
 			t.Fatalf("역직렬화 실패: %v", err)
 		}
-		if gotParams.ClientVersion != params.ClientVersion {
-			t.Errorf("ClientVersion: got %q, want %q", gotParams.ClientVersion, params.ClientVersion)
+		if gotParams.ClientInfo.Version != params.ClientInfo.Version {
+			t.Errorf("ClientInfo.Version: got %q, want %q", gotParams.ClientInfo.Version, params.ClientInfo.Version)
 		}
-		if gotParams.ClientName != params.ClientName {
-			t.Errorf("ClientName: got %q, want %q", gotParams.ClientName, params.ClientName)
+		if gotParams.ClientInfo.Name != params.ClientInfo.Name {
+			t.Errorf("ClientInfo.Name: got %q, want %q", gotParams.ClientInfo.Name, params.ClientInfo.Name)
 		}
 
 		result := protocol.InitializeResult{ServerName: "test-server", ServerVersion: "2.0.0"}

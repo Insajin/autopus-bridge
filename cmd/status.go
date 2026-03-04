@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/insajin/autopus-bridge/internal/config"
@@ -218,7 +219,7 @@ func isProcessRunning(pid int) bool {
 		return false
 	}
 	// Unix 계열에서는 Signal 0을 보내서 프로세스 존재 확인
-	err = process.Signal(os.Signal(nil))
+	err = process.Signal(syscall.Signal(0))
 	return err == nil
 }
 

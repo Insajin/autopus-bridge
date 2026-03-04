@@ -270,7 +270,7 @@ func TestConfig_GetAvailableProviders(t *testing.T) {
 					Gemini: ProviderConfig{APIKeyEnv: "GEMINI_API_KEY"},
 				},
 			},
-			expected: []string{"claude", "gemini"},
+			expected: []string{"anthropic", "google"},
 		},
 		{
 			name: "Claude만 설정",
@@ -280,7 +280,7 @@ func TestConfig_GetAvailableProviders(t *testing.T) {
 					Gemini: ProviderConfig{APIKeyEnv: "NONEXISTENT"},
 				},
 			},
-			expected: []string{"claude"},
+			expected: []string{"anthropic"},
 		},
 		{
 			name: "프로바이더 없음",

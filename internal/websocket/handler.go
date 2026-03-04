@@ -268,6 +268,9 @@ func (r *Router) registerDefaultHandlers() {
 	// MCP Codegen/Deploy 핸들러 (SPEC-SELF-EXPAND-001)
 	r.RegisterHandler(ws.AgentMsgMCPCodegenRequest, r.handleMCPCodegenRequest)
 	r.RegisterHandler(ws.AgentMsgMCPDeploy, r.handleMCPDeploy)
+
+	// Agent Response Protocol 핸들러 (SPEC-BRIDGE-GATEWAY-001)
+	r.RegisterHandler(ws.AgentMsgAgentResponseReq, r.handleAgentResponseRequest)
 }
 
 // RegisterHandler는 메시지 타입에 대한 핸들러를 등록합니다.
@@ -285,9 +288,10 @@ func (r *Router) HandleMessage(ctx context.Context, msg ws.AgentMessage) error {
 	r.handlersMu.RUnlock()
 
 	if !exists {
-		// 알 수 없는 메시지 타입은 무시
+		log.Printf("[handler] 미등록 메시지 타입: type=%s", msg.Type)
 		return nil
 	}
+
 
 	if err := handler(ctx, msg); err != nil {
 		if r.onError != nil {
@@ -357,10 +361,16 @@ func (r *Router) executeTask(ctx context.Context, task ws.TaskRequestPayload) {
 	// 작업 실행
 	result, err := r.executor.Execute(ctx, task)
 	if err != nil {
-		// 실행 실패 시 에러 응답
+		log.Printf("[task-request] 실행 실패: execution_id=%s provider=%s model=%s err=%v", task.ExecutionID, task.Provider, task.Model, err)
+		// 실행 실패 시 에러 응답: TaskError의 구체적 에러 코드를 전파
+		code := "EXECUTION_ERROR"
+		type codeError interface{ ErrorCode() string }
+		if ce, ok := err.(codeError); ok {
+			code = ce.ErrorCode()
+		}
 		errPayload := ws.TaskErrorPayload{
 			ExecutionID: task.ExecutionID,
-			Code:        "EXECUTION_ERROR",
+			Code:        code,
 			Message:     err.Error(),
 			Retryable:   isRetryableError(err),
 		}
@@ -370,6 +380,101 @@ func (r *Router) executeTask(ctx context.Context, task ws.TaskRequestPayload) {
 
 	// 결과 전송
 	_ = r.client.SendTaskResult(result)
+}
+
+// handleAgentResponseRequest는 에이전트 응답 요청 메시지를 처리합니다 (SPEC-BRIDGE-GATEWAY-001).
+// BridgeAgentExecutor가 보내는 새 프로토콜로, task_request와 동일한 실행 흐름이나
+// agent_response_stream/complete/error 메시지 타입으로 응답한다.
+func (r *Router) handleAgentResponseRequest(ctx context.Context, msg ws.AgentMessage) error {
+	// 디버그: 원시 메시지 크기만 로깅 (system_prompt가 매우 클 수 있음)
+	log.Printf("[agent-response] 수신: payload_size=%d bytes", len(msg.Payload))
+
+	var req ws.AgentResponseRequestPayload
+	if err := json.Unmarshal(msg.Payload, &req); err != nil {
+		log.Printf("[agent-response] 페이로드 파싱 실패: %v", err)
+		errPayload := ws.AgentResponseErrorPayload{
+			ExecutionID: "",
+			Code:        "INVALID_PAYLOAD",
+			Message:     fmt.Sprintf("agent_response_request 페이로드 파싱 실패: %v", err),
+			Retryable:   false,
+		}
+		return r.client.SendAgentResponseError(errPayload)
+	}
+
+	log.Printf("[agent-response] 파싱 완료: execution_id=%s provider=%s model=%s", req.ExecutionID, req.Provider, req.Model)
+
+	// 태스크 추적 시작
+	r.client.TaskTracker().Track(req.ExecutionID, "agent_response")
+
+	// 작업 실행기가 없으면 에러 응답
+	if r.executor == nil {
+		r.client.TaskTracker().Complete(req.ExecutionID)
+		errPayload := ws.AgentResponseErrorPayload{
+			ExecutionID: req.ExecutionID,
+			Code:        "NO_EXECUTOR",
+			Message:     "작업 실행기가 설정되지 않았습니다",
+			Retryable:   false,
+		}
+		return r.client.SendAgentResponseError(errPayload)
+	}
+
+	// AgentResponseRequestPayload -> TaskRequestPayload로 변환하여 기존 실행기 재사용
+	task := ws.TaskRequestPayload{
+		ExecutionID:    req.ExecutionID,
+		Prompt:         req.Prompt,
+		SystemPrompt:   req.SystemPrompt,
+		Provider:       req.Provider,
+		Model:          req.Model,
+		MaxTokens:      req.MaxTokens,
+		Tools:          req.Tools,
+		Timeout:        req.Timeout, // agent_response_request의 "timeout"을 TaskRequestPayload의 "timeout_seconds"에 매핑
+		WorkDir:        req.WorkDir,
+		ApprovalPolicy: req.ApprovalPolicy,
+		ExecutionMode:  req.ExecutionMode,
+	}
+
+	// 비동기로 작업 실행 (응답은 agent_response_* 메시지 타입 사용)
+	log.Printf("[agent-response] 비동기 실행 시작: execution_id=%s", req.ExecutionID)
+	go r.executeAgentResponse(ctx, task)
+
+	return nil
+}
+
+// executeAgentResponse는 에이전트 응답 요청을 실행하고 결과를 전송합니다 (SPEC-BRIDGE-GATEWAY-001).
+// executeTask와 동일한 실행 흐름이나 agent_response_* 메시지 타입으로 응답한다.
+func (r *Router) executeAgentResponse(ctx context.Context, task ws.TaskRequestPayload) {
+	defer r.client.TaskTracker().Complete(task.ExecutionID)
+	log.Printf("[agent-response] 실행 시작: execution_id=%s model=%s", task.ExecutionID, task.Model)
+
+	// 작업 실행
+	result, err := r.executor.Execute(ctx, task)
+	if err != nil {
+		log.Printf("[agent-response] 실행 에러: execution_id=%s err=%v", task.ExecutionID, err)
+		code := "EXECUTION_ERROR"
+		type codeError interface{ ErrorCode() string }
+		if ce, ok := err.(codeError); ok {
+			code = ce.ErrorCode()
+		}
+		errPayload := ws.AgentResponseErrorPayload{
+			ExecutionID: task.ExecutionID,
+			Code:        code,
+			Message:     err.Error(),
+			Retryable:   isRetryableError(err),
+		}
+		_ = r.client.SendAgentResponseError(errPayload)
+		return
+	}
+
+	// 완료 응답 전송
+	log.Printf("[agent-response] 실행 완료: execution_id=%s duration=%dms", task.ExecutionID, result.Duration)
+	completePayload := ws.AgentResponseCompletePayload{
+		ExecutionID: task.ExecutionID,
+		Output:      result.Output,
+		ExitCode:    result.ExitCode,
+		Duration:    result.Duration,
+		TokenUsage:  result.TokenUsage,
+	}
+	_ = r.client.SendAgentResponseComplete(completePayload)
 }
 
 // retryable은 재시도 가능 여부를 노출하는 에러 인터페이스입니다.

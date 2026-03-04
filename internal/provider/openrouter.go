@@ -40,6 +40,26 @@ func ResolveProviderName(openRouterPrefix string) string {
 	return openRouterToProvider[openRouterPrefix]
 }
 
+// ToCanonicalName은 내부 프로바이더 이름을 백엔드 정규 이름(OpenRouter 형식)으로 변환합니다.
+// 매핑이 없으면 원래 이름을 그대로 반환합니다.
+// 예: "claude" -> "anthropic", "codex" -> "openai", "gemini" -> "google"
+func ToCanonicalName(internalName string) string {
+	if canonical, ok := providerToOpenRouter[internalName]; ok {
+		return canonical
+	}
+	return internalName
+}
+
+// ToInternalName은 백엔드 정규 이름(OpenRouter 형식)을 내부 프로바이더 이름으로 변환합니다.
+// 매핑이 없으면 원래 이름을 그대로 반환합니다.
+// 예: "anthropic" -> "claude", "openai" -> "codex", "google" -> "gemini"
+func ToInternalName(canonicalName string) string {
+	if internal, ok := openRouterToProvider[canonicalName]; ok {
+		return internal
+	}
+	return canonicalName
+}
+
 // StripProviderPrefix는 OpenRouter 형식 모델 ID에서 프로바이더 접두사를 제거합니다.
 // 레거시 형식이면 그대로 반환합니다.
 // 예: "openai/o3-mini" -> "o3-mini", "o3-mini" -> "o3-mini"

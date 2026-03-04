@@ -251,8 +251,10 @@ func (p *AppServerProcess) initialize(ctx context.Context) error {
 
 	// initialize 요청 전송 (공유 프로토콜 타입 사용)
 	result, err := p.client.Call(initCtx, protocol.MethodInitialize, protocol.InitializeParams{
-		ClientName:    "autopus-bridge",
-		ClientVersion: "autopus-bridge/1.0",
+		ClientInfo: protocol.ClientInfo{
+			Name:    "autopus-bridge",
+			Version: "1.0.0",
+		},
 	})
 	if err != nil {
 		if initCtx.Err() != nil {
@@ -366,7 +368,7 @@ func WithAppServerAuth(method, key string) CodexAppServerOption {
 // 프로세스를 시작하고 인증을 수행한 후 프로바이더를 반환합니다.
 func NewCodexAppServerProvider(cliPath string, opts ...CodexAppServerOption) (*CodexAppServerProvider, error) {
 	p := &CodexAppServerProvider{
-		approvalPolicy: "auto-approve",
+		approvalPolicy: "never",
 		authMethod:     "apiKey",
 		rpcRelay:       approval.NewRPCRelay("codex"),
 		logger:         zerolog.New(os.Stderr).With().Timestamp().Logger(),
@@ -446,13 +448,12 @@ func (p *CodexAppServerProvider) authenticate(ctx context.Context) error {
 
 	// 인증 파라미터 구성 (공유 프로토콜 타입 사용)
 	params := protocol.AccountLoginParams{
-		Method: p.authMethod,
+		Type: p.authMethod,
 	}
 	if p.authMethod == "apiKey" {
 		params.APIKey = p.authKey
-	} else if p.authMethod == "chatgptAuthTokens" {
-		params.ChatGPTAuthTokens = p.authKey
 	}
+	// "chatgpt" 타입은 추가 필드 불필요 (app-server가 저장된 인증 사용)
 
 	// 인증 요청 전송
 	_, err := rpcClient.Call(authCtx, protocol.MethodAccountLoginStart, params)
@@ -480,10 +481,19 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		return nil, ErrProcessNotRunning
 	}
 
-	// 2. 승인 정책 결정
+	// 2. 승인 정책 결정 (Codex App Server 호환 매핑)
 	approvalPolicy := p.approvalPolicy
 	if approvalPolicy == "" {
 		approvalPolicy = "auto-approve"
+	}
+	// Codex App Server는 auto-approve/deny-all을 인식하지 못하므로 변환
+	// auto-approve → never (모든 도구 호출 자동 승인)
+	// deny-all → reject (모든 도구 호출 거부)
+	switch approvalPolicy {
+	case "auto-approve", "auto-execute", "full-auto":
+		approvalPolicy = "never"
+	case "deny-all":
+		approvalPolicy = "reject"
 	}
 
 	// 3. thread/start 호출
@@ -507,12 +517,31 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 	}
 
 	// thread/start 결과 파싱
-	var thread protocol.ThreadStartResult
+	// Codex App Server는 {"thread":{"id":"..."},...} 형태로 응답하므로
+	// 중첩된 thread.id를 추출한다.
+	var threadID string
 	if threadResult != nil {
-		if err := json.Unmarshal(*threadResult, &thread); err != nil {
-			return nil, fmt.Errorf("thread/start 결과 파싱 실패: %w", err)
+		// 먼저 중첩 구조 시도: {"thread":{"id":"..."}}
+		var nested struct {
+			Thread struct {
+				ID string `json:"id"`
+			} `json:"thread"`
 		}
+		if err := json.Unmarshal(*threadResult, &nested); err == nil && nested.Thread.ID != "" {
+			threadID = nested.Thread.ID
+		} else {
+			// 폴백: 플랫 구조 {"threadId":"..."}
+			var flat protocol.ThreadStartResult
+			if err := json.Unmarshal(*threadResult, &flat); err == nil {
+				threadID = flat.ThreadID
+			}
+		}
+		p.logger.Debug().Str("thread_id", threadID).Msg("thread/start 파싱 완료")
+	} else {
+		p.logger.Warn().Msg("thread/start 결과가 nil")
 	}
+	// thread 변수를 기존 코드와 호환되게 유지
+	thread := protocol.ThreadStartResult{ThreadID: threadID}
 
 	// 4. 알림 핸들러 등록
 	turnDone := make(chan struct{})

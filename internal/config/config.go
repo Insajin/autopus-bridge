@@ -86,15 +86,22 @@ type ProvidersConfig struct {
 
 // ProviderConfig는 개별 AI 프로바이더 설정입니다.
 type ProviderConfig struct {
+	// Enabled는 프로바이더 활성화 여부입니다.
+	// 기본값: true. false로 설정하면 Registry에 등록되지 않습니다.
+	Enabled *bool `mapstructure:"enabled" yaml:"enabled"`
+	// AuthMethod는 인증 방식입니다 ("apikey", "chatgpt", "chatgptAuthTokens").
+	// 기본값: "apikey"
+	AuthMethod string `mapstructure:"auth_method" yaml:"auth_method"`
 	// APIKeyEnv는 API 키를 가져올 환경변수 이름입니다.
 	// REQ-N-01: API 키를 평문으로 파일에 저장하지 않음
 	APIKeyEnv string `mapstructure:"api_key_env"`
 	// DefaultModel은 기본 사용 모델입니다.
 	DefaultModel string `mapstructure:"default_model"`
-	// Mode는 프로바이더 실행 모드입니다 ("api", "cli", "hybrid").
+	// Mode는 프로바이더 실행 모드입니다 ("api", "cli", "hybrid", "app-server").
 	// - "api": API 키를 사용한 직접 API 호출 (기본값)
 	// - "cli": claude CLI 바이너리를 서브프로세스로 실행
 	// - "hybrid": CLI 우선, API 폴백
+	// - "app-server": App Server 모드
 	Mode string `mapstructure:"mode"`
 	// CLIPath는 claude CLI 바이너리 경로입니다.
 	// 기본값: "claude" (PATH에서 검색)
@@ -255,10 +262,32 @@ func (p *ProviderConfig) IsCLIAvailable() bool {
 	return err == nil
 }
 
+// IsEnabled는 프로바이더가 활성화되어 있는지 반환합니다.
+// Enabled가 설정되지 않은 경우 기본값 true를 반환합니다.
+func (p *ProviderConfig) IsEnabled() bool {
+	if p.Enabled == nil {
+		return true
+	}
+	return *p.Enabled
+}
+
+// GetAuthMethod는 인증 방식을 반환합니다.
+// 설정되지 않은 경우 기본값 "apikey"를 반환합니다.
+func (p *ProviderConfig) GetAuthMethod() string {
+	if p.AuthMethod == "" {
+		return "apikey"
+	}
+	return p.AuthMethod
+}
+
 // IsAvailable은 프로바이더가 사용 가능한지 확인합니다.
 // 모드에 따라 API 키 또는 CLI 가용성을 확인합니다.
 // Interactive execution mode additionally requires CLI availability.
 func (p *ProviderConfig) IsAvailable() bool {
+	if !p.IsEnabled() {
+		return false
+	}
+
 	mode := p.GetMode()
 
 	var available bool
@@ -294,60 +323,71 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("AI 프로바이더가 설정되지 않았습니다. ANTHROPIC_API_KEY, GEMINI_API_KEY, 또는 OPENAI_API_KEY 환경변수를 설정하거나, claude/gemini/codex CLI를 설치하세요")
 	}
 
-	// Claude 모드 검증
-	claudeMode := c.Providers.Claude.GetMode()
-	validModes := map[string]bool{
-		"api":    true,
-		"cli":    true,
-		"hybrid": true,
-	}
-	if !validModes[claudeMode] {
-		return fmt.Errorf("유효하지 않은 Claude 모드: %s (api, cli, hybrid 중 하나)", claudeMode)
+	// Claude 모드 검증 - Enabled=false이면 건너뜀
+	if c.Providers.Claude.IsEnabled() {
+		claudeMode := c.Providers.Claude.GetMode()
+		validModes := map[string]bool{
+			"api":    true,
+			"cli":    true,
+			"hybrid": true,
+		}
+		if !validModes[claudeMode] {
+			return fmt.Errorf("유효하지 않은 Claude 모드: %s (api, cli, hybrid 중 하나)", claudeMode)
+		}
+
+		// CLI 모드인 경우 CLI 가용성 확인
+		if claudeMode == "cli" && !c.Providers.Claude.IsCLIAvailable() {
+			return fmt.Errorf("claude CLI 모드가 설정되었지만 claude 바이너리를 찾을 수 없습니다: %s", c.Providers.Claude.GetCLIPath())
+		}
+
+		// Claude ExecutionMode validation
+		claudeExecMode := c.Providers.Claude.GetExecutionMode()
+		validExecModes := map[string]bool{
+			"auto-execute": true,
+			"interactive":  true,
+		}
+		if !validExecModes[claudeExecMode] {
+			return fmt.Errorf("invalid Claude execution_mode: %s (must be auto-execute or interactive)", claudeExecMode)
+		}
+		if claudeExecMode == "interactive" && !c.Providers.Claude.IsCLIAvailable() {
+			return fmt.Errorf("claude interactive execution_mode requires CLI availability: %s", c.Providers.Claude.GetCLIPath())
+		}
 	}
 
-	// CLI 모드인 경우 CLI 가용성 확인
-	if claudeMode == "cli" && !c.Providers.Claude.IsCLIAvailable() {
-		return fmt.Errorf("claude CLI 모드가 설정되었지만 claude 바이너리를 찾을 수 없습니다: %s", c.Providers.Claude.GetCLIPath())
+	// Gemini 모드 검증 - Enabled=false이면 건너뜀
+	if c.Providers.Gemini.IsEnabled() {
+		geminiMode := c.Providers.Gemini.GetMode()
+		validGeminiModes := map[string]bool{
+			"api":    true,
+			"cli":    true,
+			"hybrid": true,
+		}
+		if !validGeminiModes[geminiMode] {
+			return fmt.Errorf("유효하지 않은 Gemini 모드: %s (api, cli, hybrid 중 하나)", geminiMode)
+		}
+		if geminiMode == "cli" && !c.Providers.Gemini.IsCLIAvailable() {
+			return fmt.Errorf("gemini CLI 모드가 설정되었지만 gemini 바이너리를 찾을 수 없습니다: %s", c.Providers.Gemini.GetCLIPath())
+		}
 	}
 
-	// Claude ExecutionMode validation
-	claudeExecMode := c.Providers.Claude.GetExecutionMode()
-	validExecModes := map[string]bool{
-		"auto-execute": true,
-		"interactive":  true,
-	}
-	if !validExecModes[claudeExecMode] {
-		return fmt.Errorf("invalid Claude execution_mode: %s (must be auto-execute or interactive)", claudeExecMode)
-	}
-	if claudeExecMode == "interactive" && !c.Providers.Claude.IsCLIAvailable() {
-		return fmt.Errorf("claude interactive execution_mode requires CLI availability: %s", c.Providers.Claude.GetCLIPath())
-	}
-
-	// Gemini 모드 검증
-	geminiMode := c.Providers.Gemini.GetMode()
-	if !validModes[geminiMode] {
-		return fmt.Errorf("유효하지 않은 Gemini 모드: %s (api, cli, hybrid 중 하나)", geminiMode)
-	}
-	if geminiMode == "cli" && !c.Providers.Gemini.IsCLIAvailable() {
-		return fmt.Errorf("gemini CLI 모드가 설정되었지만 gemini 바이너리를 찾을 수 없습니다: %s", c.Providers.Gemini.GetCLIPath())
-	}
-
-	// Codex 모드 검증 (app-server 추가)
-	codexMode := c.Providers.Codex.GetMode()
-	validCodexModes := map[string]bool{
-		"api":        true,
-		"cli":        true,
-		"hybrid":     true,
-		"app-server": true,
-	}
-	if !validCodexModes[codexMode] {
-		return fmt.Errorf("유효하지 않은 Codex 모드: %s (api, cli, hybrid, app-server 중 하나)", codexMode)
-	}
-	if codexMode == "cli" && !c.Providers.Codex.IsCLIAvailable() {
-		return fmt.Errorf("codex CLI 모드가 설정되었지만 codex 바이너리를 찾을 수 없습니다: %s", c.Providers.Codex.GetCLIPath())
-	}
-	if codexMode == "app-server" && !c.Providers.Codex.IsCLIAvailable() {
-		return fmt.Errorf("codex app-server 모드가 설정되었지만 codex 바이너리를 찾을 수 없습니다: %s", c.Providers.Codex.GetCLIPath())
+	// Codex 모드 검증 (app-server 추가) - Enabled=false이면 건너뜀
+	if c.Providers.Codex.IsEnabled() {
+		codexMode := c.Providers.Codex.GetMode()
+		validCodexModes := map[string]bool{
+			"api":        true,
+			"cli":        true,
+			"hybrid":     true,
+			"app-server": true,
+		}
+		if !validCodexModes[codexMode] {
+			return fmt.Errorf("유효하지 않은 Codex 모드: %s (api, cli, hybrid, app-server 중 하나)", codexMode)
+		}
+		if codexMode == "cli" && !c.Providers.Codex.IsCLIAvailable() {
+			return fmt.Errorf("codex CLI 모드가 설정되었지만 codex 바이너리를 찾을 수 없습니다: %s", c.Providers.Codex.GetCLIPath())
+		}
+		if codexMode == "app-server" && !c.Providers.Codex.IsCLIAvailable() {
+			return fmt.Errorf("codex app-server 모드가 설정되었지만 codex 바이너리를 찾을 수 없습니다: %s", c.Providers.Codex.GetCLIPath())
+		}
 	}
 
 	// 로그 레벨 검증
@@ -381,15 +421,16 @@ func (c *Config) Validate() error {
 // GetAvailableProviders는 사용 가능한 프로바이더 목록을 반환합니다.
 // Claude의 경우 모드에 따라 API 키 또는 CLI 가용성을 확인합니다.
 func (c *Config) GetAvailableProviders() []string {
+	// 백엔드 정규 이름(OpenRouter 형식)으로 반환
 	var providers []string
 	if c.Providers.Claude.IsAvailable() {
-		providers = append(providers, "claude")
+		providers = append(providers, "anthropic")
 	}
 	if c.Providers.Gemini.IsAvailable() {
-		providers = append(providers, "gemini")
+		providers = append(providers, "google")
 	}
 	if c.Providers.Codex.IsAvailable() {
-		providers = append(providers, "codex")
+		providers = append(providers, "openai")
 	}
 	return providers
 }

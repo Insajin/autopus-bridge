@@ -204,12 +204,31 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		cfg.Reconnection.MaxAttempts,
 	)
 
+	// SPEC-BRIDGE-GATEWAY-001: 프로바이더 capabilities 맵 구성
+	// 백엔드는 OpenRouter 정규 이름(anthropic/openai/google)을 사용하므로
+	// 내부 이름(claude/codex/gemini)을 정규 이름으로 변환하여 전송.
+	// ValidateConfig()를 통과하는 프로바이더만 capabilities에 포함하여
+	// API 키 없는 프로바이더로의 태스크 라우팅을 방지합니다.
+	providerCaps := make(map[string]bool)
+	for _, p := range registry.ListProviders() {
+		if err := p.ValidateConfig(); err == nil {
+			canonicalName := provider.ToCanonicalName(p.Name())
+			providerCaps[canonicalName] = true
+		} else {
+			logger.Warn().
+				Str("provider", p.Name()).
+				Err(err).
+				Msg("프로바이더 설정 검증 실패, capabilities에서 제외")
+		}
+	}
+
 	// WebSocket 클라이언트 생성 (단일 인스턴스)
 	client := websocket.NewClient(
 		srvURL,
 		authToken,
 		version,
 		websocket.WithCapabilities(cfg.GetAvailableProviders()),
+		websocket.WithProviderCapabilities(providerCaps),
 		websocket.WithReconnectStrategy(reconnectStrategy),
 	)
 
@@ -467,18 +486,21 @@ func gracefulShutdown(client *websocket.Client, taskExecutor *executor.TaskExecu
 // initializeProviders는 설정에 따라 AI 프로바이더를 초기화합니다.
 func initializeProviders(ctx context.Context, cfg *config.Config) (*provider.Registry, error) {
 	registryConfig := provider.RegistryConfig{
+		ClaudeEnabled:      cfg.Providers.Claude.Enabled,
 		ClaudeAPIKey:       cfg.Providers.Claude.GetAPIKey(),
 		ClaudeDefaultModel: cfg.Providers.Claude.DefaultModel,
 		ClaudeMode:         cfg.Providers.Claude.GetMode(),
 		ClaudeCLIPath:      cfg.Providers.Claude.GetCLIPath(),
 		ClaudeCLITimeout:   cfg.Providers.Claude.GetCLITimeout(),
 
+		GeminiEnabled:      cfg.Providers.Gemini.Enabled,
 		GeminiAPIKey:       cfg.Providers.Gemini.GetAPIKey(),
 		GeminiDefaultModel: cfg.Providers.Gemini.DefaultModel,
 		GeminiMode:         cfg.Providers.Gemini.GetMode(),
 		GeminiCLIPath:      getProviderCLIPath(cfg.Providers.Gemini, "gemini"),
 		GeminiCLITimeout:   cfg.Providers.Gemini.GetCLITimeout(),
 
+		CodexEnabled:        cfg.Providers.Codex.Enabled,
 		CodexAPIKey:         cfg.Providers.Codex.GetAPIKey(),
 		CodexDefaultModel:   cfg.Providers.Codex.DefaultModel,
 		CodexMode:           cfg.Providers.Codex.GetMode(),
@@ -488,7 +510,7 @@ func initializeProviders(ctx context.Context, cfg *config.Config) (*provider.Reg
 		CodexChatGPTAuthEnv: cfg.Providers.Codex.ChatGPTAuthEnv,
 	}
 
-	return provider.InitializeRegistry(ctx, registryConfig)
+	return provider.InitializeRegistryWithLogger(ctx, registryConfig, log.Logger)
 }
 
 // getProviderCLIPath는 프로바이더별 CLI 바이너리 경로를 반환합니다.

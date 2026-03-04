@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-03-04
+
+### Added
+
+- SPEC-BRIDGE-GATEWAY-001: Agent Response Protocol 지원
+  - `agent_response_request` 메시지 수신 및 `agent_response_stream/complete/error` 응답
+  - WebSocket 클라이언트에 `SendAgentResponseStream`, `SendAgentResponseComplete`, `SendAgentResponseError` 메서드 추가
+  - 라우터에 `handleAgentResponseRequest`, `executeAgentResponse` 핸들러 등록
+- SPEC-BRIDGE-GATEWAY-001: Provider Capabilities 전송
+  - `WithProviderCapabilities` 옵션으로 `agent_connect` 메시지에 프로바이더 capabilities 포함
+  - ValidateConfig() 통과한 프로바이더만 capabilities에 포함하여 잘못된 라우팅 방지
+- 프로바이더 `enabled` 설정 필드 추가 (`config.yaml`에서 프로바이더별 활성화/비활성화)
+- 정규 이름 매핑 유틸리티: `ToCanonicalName()`, `ToInternalName()` (claude↔anthropic, codex↔openai, gemini↔google)
+- `GetAvailableProviders()`가 백엔드 정규 이름(anthropic, google, openai)으로 반환
+- `GetForTask()`에서 OpenRouter 정규 이름→내부 이름 변환 폴백
+- `ExecuteRequest`에 `SystemPrompt` 필드 추가
+- `TaskError.ErrorCode()` 메서드 추가 (websocket 에러 코드 전파)
+- Codex `~/.codex/auth.json` 자동 감지 (`readCodexAuthFile`)
+- `Registry.GetRegisteredProviderNames()` 메서드 추가
+
+### Fixed
+
+- `isProcessRunning`에서 `os.Signal(nil)` → `syscall.Signal(0)`으로 수정
+- `ErrorCodeProviderNotFound` 값을 백엔드 호환 `"provider_not_found"`로 변경
+- API 키 미설정 에러를 `PROVIDER_ERROR` 대신 `provider_not_found`로 분류
+- 미등록 메시지 타입 수신 시 로그 추가
+- `agent_response_request` 플랫 JSON 수신 시 raw payload 보존
+
+### Changed
+
+- Codex App Server 기본 approval policy를 `"auto-approve"` → `"never"`로 변경
+- Codex App Server approval policy 매핑: auto-approve→never, deny-all→reject
+- `InitializeParams` 구조체를 `ClientInfo` 중첩 구조로 변경
+- `AccountLoginParams.Method` → `AccountLoginParams.Type`으로 필드명 변경
+- `thread/start` 결과 파싱: 중첩 구조 `{"thread":{"id":"..."}}` 우선 시도 후 플랫 폴백
+- Enabled=false인 프로바이더는 Registry 등록 및 Validate()에서 건너뜀
+- `InitializeRegistry` → `InitializeRegistryWithLogger`로 전환 (로거 주입)
+
 ## [1.8.0] - 2026-03-03
 
 ### Removed
@@ -169,6 +207,7 @@ Previously located at `github.com/anthropics/acos/cmd/local-agent-bridge`.
 - Protocol types extracted to separate SDK: `github.com/insajin/autopus-agent-protocol`
 - See [docs/MIGRATION.md](docs/MIGRATION.md) for upgrade instructions
 
+[1.9.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.9.0
 [1.8.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.8.0
 [1.7.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.7.0
 [1.5.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.5.0

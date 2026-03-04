@@ -3,8 +3,10 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -168,8 +170,30 @@ func (r *Registry) ValidateAll() error {
 // DefaultRegistry는 기본 전역 프로바이더 레지스트리입니다.
 var DefaultRegistry = NewRegistry()
 
+// isProviderEnabled는 프로바이더 활성화 여부를 확인합니다.
+// nil이면 기본값 true를 반환합니다.
+func isProviderEnabled(enabled *bool) bool {
+	if enabled == nil {
+		return true
+	}
+	return *enabled
+}
+
+// GetRegisteredProviderNames는 등록된 프로바이더 이름 목록을 반환합니다.
+func (r *Registry) GetRegisteredProviderNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	names := make([]string, 0, len(r.providers))
+	for name := range r.providers {
+		names = append(names, name)
+	}
+	return names
+}
+
 // RegistryConfig는 레지스트리 초기화 설정입니다.
 type RegistryConfig struct {
+	// ClaudeEnabled는 Claude 프로바이더 활성화 여부입니다. nil이면 기본값 true입니다.
+	ClaudeEnabled *bool
 	// ClaudeAPIKey는 Claude API 키입니다.
 	ClaudeAPIKey string
 	// ClaudeDefaultModel은 Claude 기본 모델입니다.
@@ -197,6 +221,8 @@ type RegistryConfig struct {
 	// 기본값: 300
 	ClaudeApprovalTimeout int
 
+	// GeminiEnabled는 Gemini 프로바이더 활성화 여부입니다. nil이면 기본값 true입니다.
+	GeminiEnabled *bool
 	// GeminiAPIKey는 Gemini API 키입니다.
 	GeminiAPIKey string
 	// GeminiDefaultModel은 Gemini 기본 모델입니다.
@@ -210,6 +236,8 @@ type RegistryConfig struct {
 	// GeminiCLIFallbackCommand는 gemini CLI 폴백 명령어입니다.
 	GeminiCLIFallbackCommand string
 
+	// CodexEnabled는 Codex 프로바이더 활성화 여부입니다. nil이면 기본값 true입니다.
+	CodexEnabled *bool
 	// CodexAPIKey는 Codex (OpenAI) API 키입니다.
 	CodexAPIKey string
 	// CodexDefaultModel은 Codex 기본 모델입니다.
@@ -238,31 +266,43 @@ func InitializeRegistryWithLogger(ctx context.Context, cfg RegistryConfig, logge
 	providerCount := 0
 
 	// Claude 프로바이더 초기화 (모드에 따라 분기)
-	claudeProvider, err := initializeClaudeProvider(cfg, logger)
-	if err != nil {
-		// 에러가 발생해도 다른 프로바이더 시도
-		logger.Warn().Err(err).Msg("Claude 프로바이더 초기화 실패")
-	} else if claudeProvider != nil {
-		registry.Register(claudeProvider)
-		providerCount++
+	if !isProviderEnabled(cfg.ClaudeEnabled) {
+		logger.Info().Msg("Claude 프로바이더 비활성화됨 (config.enabled=false)")
+	} else {
+		claudeProvider, err := initializeClaudeProvider(cfg, logger)
+		if err != nil {
+			// 에러가 발생해도 다른 프로바이더 시도
+			logger.Warn().Err(err).Msg("Claude 프로바이더 초기화 실패")
+		} else if claudeProvider != nil {
+			registry.Register(claudeProvider)
+			providerCount++
+		}
 	}
 
 	// Gemini 프로바이더 초기화 (모드에 따라 분기)
-	geminiProvider, err := initializeGeminiProvider(ctx, cfg, logger)
-	if err != nil {
-		logger.Warn().Err(err).Msg("Gemini 프로바이더 초기화 실패")
-	} else if geminiProvider != nil {
-		registry.Register(geminiProvider)
-		providerCount++
+	if !isProviderEnabled(cfg.GeminiEnabled) {
+		logger.Info().Msg("Gemini 프로바이더 비활성화됨 (config.enabled=false)")
+	} else {
+		geminiProvider, err := initializeGeminiProvider(ctx, cfg, logger)
+		if err != nil {
+			logger.Warn().Err(err).Msg("Gemini 프로바이더 초기화 실패")
+		} else if geminiProvider != nil {
+			registry.Register(geminiProvider)
+			providerCount++
+		}
 	}
 
 	// Codex 프로바이더 초기화 (모드에 따라 분기)
-	codexProvider, err := initializeCodexProvider(cfg, logger)
-	if err != nil {
-		logger.Warn().Err(err).Msg("Codex 프로바이더 초기화 실패")
-	} else if codexProvider != nil {
-		registry.Register(codexProvider)
-		providerCount++
+	if !isProviderEnabled(cfg.CodexEnabled) {
+		logger.Info().Msg("Codex 프로바이더 비활성화됨 (config.enabled=false)")
+	} else {
+		codexProvider, err := initializeCodexProvider(cfg, logger)
+		if err != nil {
+			logger.Warn().Err(err).Msg("Codex 프로바이더 초기화 실패")
+		} else if codexProvider != nil {
+			registry.Register(codexProvider)
+			providerCount++
+		}
 	}
 
 	// REQ-S-05: 설정된 AI 프로바이더가 없으면 에러
@@ -421,17 +461,26 @@ func initializeClaudeInteractiveProvider(cfg RegistryConfig, cliPath string, cli
 // falling back to model-based resolution.
 //
 //  1. Explicit provider name (from agent's provider field)
-//  2. Model name prefix matching (claude-*, gemini-*)
-//  3. Provider.Supports() check
+//  2. OpenRouter canonical name resolution (anthropic->claude, openai->codex, google->gemini)
+//  3. Model name prefix matching (claude-*, gemini-*)
+//  4. Provider.Supports() check
 func (r *Registry) GetForTask(providerName, model string) (Provider, error) {
 	// 1. Explicit provider name takes priority.
 	if providerName != "" {
 		if p := r.Get(providerName); p != nil {
 			return p, nil
 		}
+		// 2. 백엔드가 정규 이름(anthropic/openai/google)으로 보낼 수 있으므로
+		// 내부 이름으로 변환하여 재시도
+		internalName := ToInternalName(providerName)
+		if internalName != providerName {
+			if p := r.Get(internalName); p != nil {
+				return p, nil
+			}
+		}
 	}
 
-	// 2. Fall back to model-based resolution.
+	// 3. Fall back to model-based resolution.
 	return r.GetForModel(model)
 }
 
@@ -625,7 +674,7 @@ func initializeCodexHybridProvider(cfg RegistryConfig, cliPath string, cliTimeou
 // initializeCodexAppServerProvider는 App Server 기반 Codex 프로바이더를 초기화합니다.
 func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger zerolog.Logger) (*CodexAppServerProvider, error) {
 	// 인증 방법 및 키 결정
-	// 우선순위: API 키 우선, ChatGPT 인증 차순
+	// 우선순위: 1) API 키 2) ChatGPT 환경변수 3) ~/.codex/auth.json 자동 감지
 	authMethod := ""
 	authKey := ""
 
@@ -640,8 +689,20 @@ func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger
 		}
 	}
 
+	// 명시적 인증이 없으면 ~/.codex/auth.json에서 자동 감지
 	if authKey == "" {
-		return nil, fmt.Errorf("%w: app-server 모드에는 API 키 또는 ChatGPT 인증이 필요합니다", ErrNoAPIKey)
+		method, key, err := readCodexAuthFile(logger)
+		if err != nil {
+			logger.Debug().Err(err).Msg("codex auth.json 자동 감지 실패")
+		} else {
+			authMethod = method
+			authKey = key
+			logger.Info().Str("method", method).Msg("codex auth.json에서 인증 정보 자동 감지")
+		}
+	}
+
+	if authKey == "" {
+		return nil, fmt.Errorf("%w: app-server 모드에는 API 키 또는 ChatGPT 인증이 필요합니다 (codex login으로 로그인하세요)", ErrNoAPIKey)
 	}
 
 	approvalPolicy := cfg.CodexApprovalPolicy
@@ -660,6 +721,42 @@ func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger
 	}
 
 	return NewCodexAppServerProvider(cliPath, opts...)
+}
+
+// readCodexAuthFile은 ~/.codex/auth.json에서 인증 정보를 읽습니다.
+// codex CLI가 로그인 상태이면 저장된 인증 정보를 반환합니다.
+func readCodexAuthFile(logger zerolog.Logger) (method string, key string, err error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", "", fmt.Errorf("홈 디렉토리 확인 실패: %w", err)
+	}
+
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return "", "", fmt.Errorf("auth.json 읽기 실패: %w", err)
+	}
+
+	var authData struct {
+		AuthMode string          `json:"auth_mode"`
+		APIKey   *string         `json:"OPENAI_API_KEY"`
+		Tokens   json.RawMessage `json:"tokens"`
+	}
+	if err := json.Unmarshal(data, &authData); err != nil {
+		return "", "", fmt.Errorf("auth.json 파싱 실패: %w", err)
+	}
+
+	// API 키가 있으면 우선 사용
+	if authData.APIKey != nil && *authData.APIKey != "" {
+		return "apiKey", *authData.APIKey, nil
+	}
+
+	// ChatGPT 인증이 있으면 사용 (app-server가 자체 처리)
+	if authData.AuthMode == "chatgpt" && len(authData.Tokens) > 0 {
+		return "chatgpt", "saved", nil
+	}
+
+	return "", "", fmt.Errorf("auth.json에 유효한 인증 정보가 없습니다 (auth_mode: %s)", authData.AuthMode)
 }
 
 // Execute는 모델에 맞는 프로바이더를 찾아 실행합니다.

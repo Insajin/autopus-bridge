@@ -23,7 +23,8 @@ import (
 // 에러 코드 상수
 const (
 	// ErrorCodeProviderNotFound는 모델의 프로바이더가 등록되지 않았을 때 사용됩니다.
-	ErrorCodeProviderNotFound = "PROVIDER_NOT_FOUND"
+	// 백엔드의 BridgeErrCodeProviderNotFound("provider_not_found")와 동일한 값 사용.
+	ErrorCodeProviderNotFound = "provider_not_found"
 	// ErrorCodeProviderError는 프로바이더 API 에러 시 사용됩니다.
 	ErrorCodeProviderError = "PROVIDER_ERROR"
 	// ErrorCodeTimeout은 작업 타임아웃 시 사용됩니다.
@@ -318,11 +319,12 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 	// 프로바이더 실행 (OpenRouter 접두사 제거: "anthropic/claude-opus-4-6" -> "claude-opus-4-6")
 	execModel := provider.StripProviderPrefix(task.Model)
 	req := provider.ExecuteRequest{
-		Prompt:    task.Prompt,
-		Model:     execModel,
-		MaxTokens: task.MaxTokens,
-		Tools:     task.Tools,
-		WorkDir:   task.WorkDir,
+		Prompt:       task.Prompt,
+		SystemPrompt: task.SystemPrompt,
+		Model:        execModel,
+		MaxTokens:    task.MaxTokens,
+		Tools:        task.Tools,
+		WorkDir:      task.WorkDir,
 	}
 
 	// 스트리밍 지원 프로바이더인 경우 스트리밍 실행, 아니면 기존 방식
@@ -391,6 +393,13 @@ func (e *TaskExecutor) executeTask(ctx context.Context, task ws.TaskRequestPaylo
 	result, err := e.Execute(ctx, task)
 
 	if err != nil {
+		// 에러 상세 로깅
+		e.logger.Error().
+			Str("execution_id", task.ExecutionID).
+			Str("model", task.Model).
+			Str("provider", task.Provider).
+			Err(err).
+			Msg("작업 실행 실패")
 		// 에러 전송 (REQ-E-05)
 		taskErr := e.toTaskError(err, task.ExecutionID)
 		if sendErr := e.sender.SendTaskError(taskErr); sendErr != nil {
@@ -496,7 +505,7 @@ func (e *TaskExecutor) classifyError(ctx context.Context, err error, executionID
 
 	if errors.Is(err, provider.ErrNoAPIKey) {
 		return &TaskError{
-			Code:      ErrorCodeProviderError,
+			Code:      ErrorCodeProviderNotFound,
 			Message:   "API 키가 설정되지 않았습니다",
 			Retryable: false,
 		}
@@ -583,6 +592,12 @@ func (e *TaskError) Error() string {
 // Unwrap은 원본 에러를 반환합니다.
 func (e *TaskError) Unwrap() error {
 	return nil
+}
+
+// ErrorCode는 에러 코드를 반환합니다.
+// websocket.codeError 인터페이스를 만족합니다.
+func (e *TaskError) ErrorCode() string {
+	return e.Code
 }
 
 // IsRetryable은 에러의 재시도 가능 여부를 반환합니다.
