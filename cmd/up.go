@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	embeddedDocker "github.com/insajin/autopus-bridge/docker"
 	"github.com/insajin/autopus-bridge/internal/aitools"
 	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/branding"
@@ -829,12 +830,32 @@ func stepChromiumSandboxImage() {
 					cacheDockerfile(dockerfilePath)
 				}
 			} else {
-				fmt.Println("  ! Dockerfile을 찾을 수 없습니다")
-				fmt.Println("    수동 빌드 방법:")
-				fmt.Println("    1. autopus-bridge 소스 디렉토리로 이동")
-				fmt.Println("    2. docker build -t autopus/chromium-sandbox:latest docker/chromium-sandbox/")
-				fmt.Println()
-				fmt.Println("  Computer Use 없이 계속 진행합니다.")
+				// 내장 Dockerfile로 빌드 시도
+				tmpDir, tmpErr := os.MkdirTemp("", "autopus-chromium-build-*")
+				if tmpErr != nil {
+					printError("임시 디렉토리 생성 실패")
+					fmt.Println("  Computer Use 없이 계속 진행합니다.")
+				} else {
+					dockerfilePath := filepath.Join(tmpDir, "Dockerfile")
+					if writeErr := os.WriteFile(dockerfilePath, embeddedDocker.ChromiumSandboxDockerfile, 0644); writeErr != nil {
+						os.RemoveAll(tmpDir)
+						printError("내장 Dockerfile 쓰기 실패")
+						fmt.Println("  Computer Use 없이 계속 진행합니다.")
+					} else {
+						fmt.Println("  내장 Dockerfile로 빌드 중 (1~2분 소요)")
+						buildCmd := exec.Command(dockerPath, "build", "-t", imageName, tmpDir)
+						buildOutput, buildErr := buildCmd.CombinedOutput()
+						if buildErr != nil {
+							os.RemoveAll(tmpDir)
+							printError("이미지 빌드 실패")
+							printDockerBuildFailureGuide(string(buildOutput))
+						} else {
+							printSuccess(fmt.Sprintf("이미지 빌드 완료: %s", imageName))
+							cacheDockerfile(tmpDir)
+							os.RemoveAll(tmpDir)
+						}
+					}
+				}
 			}
 		} else {
 			printSuccess(fmt.Sprintf("이미지 준비 완료: %s", imageName))

@@ -26,6 +26,7 @@ type mockDockerClient struct {
 	networkInspectCalled int
 	imageInspectCalled   int
 	imagePullCalled      int
+	imageBuildCalled     int
 
 	// 반환값 설정
 	pingErr           error
@@ -41,6 +42,7 @@ type mockDockerClient struct {
 	imageInspectErr   error
 	imagePullReader   io.ReadCloser
 	imagePullErr      error
+	imageBuildErr     error
 
 	// 마지막 호출 인자 기록
 	lastCreateConfig *ContainerCreateConfig
@@ -111,6 +113,11 @@ func (m *mockDockerClient) ImageInspect(ctx context.Context, imageRef string) er
 func (m *mockDockerClient) ImagePull(ctx context.Context, imageRef string) (io.ReadCloser, error) {
 	m.imagePullCalled++
 	return m.imagePullReader, m.imagePullErr
+}
+
+func (m *mockDockerClient) ImageBuild(ctx context.Context, imageRef string, dockerfile []byte) error {
+	m.imageBuildCalled++
+	return m.imageBuildErr
 }
 
 func (m *mockDockerClient) Close() error {
@@ -562,6 +569,7 @@ func TestContainerManager_EnsureImage_ReadError(t *testing.T) {
 	// io.Copy가 실패하도록 에러를 반환하는 Reader 사용
 	mock.imagePullReader = io.NopCloser(&errorReader{err: fmt.Errorf("stream interrupted")})
 	cfg := DefaultContainerConfig()
+	// embeddedDockerfile 미설정 → 풀 실패 후 빌드 폴백도 불가
 	cm, _ := NewContainerManager(mock, cfg)
 
 	ctx := context.Background()
@@ -569,8 +577,9 @@ func TestContainerManager_EnsureImage_ReadError(t *testing.T) {
 	if err == nil {
 		t.Error("EnsureImage() with read error = nil; want error")
 	}
-	if !strings.Contains(err.Error(), "스트림 읽기 실패") {
-		t.Errorf("error = %q; want containing '스트림 읽기 실패'", err.Error())
+	// 풀은 성공(pullErr==nil)하지만 스트림 읽기 실패 → 내장 Dockerfile 없이 폴백 불가
+	if !strings.Contains(err.Error(), "내장 Dockerfile 없음") {
+		t.Errorf("error = %q; want containing '내장 Dockerfile 없음'", err.Error())
 	}
 }
 

@@ -4,11 +4,15 @@ package auth
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 )
+
+// ErrRefreshTokenExpired는 refresh token이 만료되어 재인증이 필요한 경우를 나타냅니다.
+var ErrRefreshTokenExpired = errors.New("refresh token 만료")
 
 // cliRefreshRequest는 CLI refresh 엔드포인트 요청 구조체입니다.
 type cliRefreshRequest struct {
@@ -30,7 +34,7 @@ type cliRefreshResponse struct {
 // 성공 시 자격 증명을 업데이트하고 파일에 저장합니다.
 func RefreshAccessToken(creds *Credentials) error {
 	if creds.RefreshToken == "" {
-		return fmt.Errorf("refresh token이 없습니다. 'lab login'으로 다시 로그인하세요")
+		return fmt.Errorf("%w: refresh token이 없습니다. 'lab login'으로 다시 로그인하세요", ErrRefreshTokenExpired)
 	}
 
 	// WebSocket URL을 HTTP API URL로 변환
@@ -51,6 +55,9 @@ func RefreshAccessToken(creds *Credentials) error {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("%w: 토큰 갱신 실패 (HTTP %d)", ErrRefreshTokenExpired, resp.StatusCode)
+		}
 		return fmt.Errorf("토큰 갱신 실패 (HTTP %d)", resp.StatusCode)
 	}
 

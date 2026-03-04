@@ -787,6 +787,14 @@ func (c *Client) handleDisconnect(ctx context.Context, reason string) {
 				c.UpdateToken(newToken)
 			} else {
 				log.Printf("재연결 전 토큰 갱신 실패: %v", err)
+				// 인증 에러(refresh token 만료) → 재인증 필요
+				// 네트워크 에러 → 재시도 (Connect에서 재시도됨)
+				if errors.Is(err, ErrAuthExpired) && c.onAuthFailureFn != nil {
+					log.Printf("[STABILITY] 토큰 갱신 불가, 재인증 시도")
+					c.state.Store(int32(StateDisconnected))
+					c.onAuthFailureFn(ErrAuthExpired)
+					return
+				}
 			}
 		}
 

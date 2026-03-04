@@ -298,7 +298,11 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		tokenRefresher.Start(ctx)
 		// 재연결 시 갱신된 토큰을 사용하도록 콜백 등록
 		client.SetTokenRefreshFunc(func() (string, error) {
-			return tokenRefresher.GetToken()
+			token, err := tokenRefresher.GetToken()
+			if err != nil && errors.Is(err, auth.ErrRefreshTokenExpired) {
+				return "", fmt.Errorf("%w: %v", websocket.ErrAuthExpired, err)
+			}
+			return token, err
 		})
 		logger.Info().Msg("토큰 자동 갱신 서비스 시작")
 	}
