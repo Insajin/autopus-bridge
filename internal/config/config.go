@@ -3,6 +3,7 @@
 package config
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -255,6 +256,41 @@ func (p *ProviderConfig) HasChatGPTAuth() bool {
 	return p.GetChatGPTAuthKey() != ""
 }
 
+// hasCodexSavedAuth는 codex login으로 저장된 ~/.codex/auth.json에
+// 유효한 인증 정보가 있는지 확인합니다.
+func (p *ProviderConfig) hasCodexSavedAuth() bool {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return false
+	}
+
+	authPath := filepath.Join(home, ".codex", "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		return false
+	}
+
+	var authData struct {
+		AuthMode string          `json:"auth_mode"`
+		APIKey   *string         `json:"OPENAI_API_KEY"`
+		Tokens   json.RawMessage `json:"tokens"`
+	}
+	if err := json.Unmarshal(data, &authData); err != nil {
+		return false
+	}
+
+	if authData.APIKey != nil && *authData.APIKey != "" {
+		return true
+	}
+
+	if authData.AuthMode == "chatgpt" {
+		tokenPayload := string(authData.Tokens)
+		return len(authData.Tokens) > 0 && tokenPayload != "null" && tokenPayload != "{}"
+	}
+
+	return false
+}
+
 // IsCLIAvailable은 CLI 바이너리가 사용 가능한지 확인합니다.
 func (p *ProviderConfig) IsCLIAvailable() bool {
 	cliPath := p.GetCLIPath()
@@ -300,8 +336,9 @@ func (p *ProviderConfig) IsAvailable() bool {
 		// 하이브리드 모드는 CLI 또는 API 중 하나만 있으면 됨
 		available = p.IsCLIAvailable() || p.HasAPIKey()
 	case "app-server":
-		// App Server 모드는 CLI 바이너리와 인증(API Key 또는 ChatGPT 토큰)이 필요
-		available = p.IsCLIAvailable() && (p.HasAPIKey() || p.HasChatGPTAuth())
+		// App Server 모드는 CLI 바이너리와 인증이 필요.
+		// 인증 소스: API Key / chatgpt_auth_env / ~/.codex/auth.json
+		available = p.IsCLIAvailable() && (p.HasAPIKey() || p.HasChatGPTAuth() || p.hasCodexSavedAuth())
 	default:
 		return false
 	}

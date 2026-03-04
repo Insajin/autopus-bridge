@@ -331,8 +331,9 @@ type CodexAppServerProvider struct {
 	process        *AppServerProcess
 	config         ProviderConfig
 	approvalPolicy string
-	authMethod     string // "apiKey" 또는 "chatgptAuthTokens"
-	authKey        string // 실제 키 값
+	authMethod     string // "apiKey", "chatgpt", "chatgptAuthTokens"
+	authKey        string // API 키 또는 ChatGPT access token
+	authAccountID  string // chatgptAuthTokens 전용 account ID
 	rpcRelay       *approval.RPCRelay
 	logger         zerolog.Logger
 }
@@ -355,12 +356,16 @@ func WithAppServerApprovalPolicy(policy string) CodexAppServerOption {
 	}
 }
 
-// WithAppServerAuth는 인증 방식과 키를 설정합니다.
-// method는 "apiKey" 또는 "chatgptAuthTokens"입니다.
-func WithAppServerAuth(method, key string) CodexAppServerOption {
+// WithAppServerAuth는 인증 방식을 설정합니다.
+// method:
+//   - "apiKey"            : key=API Key
+//   - "chatgpt"           : 저장된 로컬 인증 사용
+//   - "chatgptAuthTokens" : key=access token, accountID=account id
+func WithAppServerAuth(method, key, accountID string) CodexAppServerOption {
 	return func(p *CodexAppServerProvider) {
 		p.authMethod = method
 		p.authKey = key
+		p.authAccountID = accountID
 	}
 }
 
@@ -450,10 +455,17 @@ func (p *CodexAppServerProvider) authenticate(ctx context.Context) error {
 	params := protocol.AccountLoginParams{
 		Type: p.authMethod,
 	}
-	if p.authMethod == "apiKey" {
+	switch p.authMethod {
+	case "apiKey":
 		params.APIKey = p.authKey
+	case "chatgptAuthTokens":
+		params.AccessToken = p.authKey
+		params.ChatGPTAccountID = p.authAccountID
+	case "chatgpt":
+		// 저장된 로컬 인증을 사용하므로 추가 필드 없음
+	default:
+		return fmt.Errorf("지원하지 않는 인증 방식: %s", p.authMethod)
 	}
-	// "chatgpt" 타입은 추가 필드 불필요 (app-server가 저장된 인증 사용)
 
 	// 인증 요청 전송
 	_, err := rpcClient.Call(authCtx, protocol.MethodAccountLoginStart, params)
@@ -639,7 +651,7 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 			if err != nil || d.Decision == "deny" {
 				decision = "decline"
 			}
-		} else if approvalPolicy == "deny-all" {
+		} else if approvalPolicy == "reject" {
 			decision = "decline"
 		}
 
@@ -669,7 +681,7 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 			if err != nil || d.Decision == "deny" {
 				decision = "decline"
 			}
-		} else if approvalPolicy == "deny-all" {
+		} else if approvalPolicy == "reject" {
 			decision = "decline"
 		}
 

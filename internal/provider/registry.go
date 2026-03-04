@@ -677,15 +677,22 @@ func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger
 	// 우선순위: 1) API 키 2) ChatGPT 환경변수 3) ~/.codex/auth.json 자동 감지
 	authMethod := ""
 	authKey := ""
+	authAccountID := ""
 
 	if cfg.CodexAPIKey != "" {
 		authMethod = "apiKey"
 		authKey = cfg.CodexAPIKey
 	} else if cfg.CodexChatGPTAuthEnv != "" {
-		chatGPTKey := os.Getenv(cfg.CodexChatGPTAuthEnv)
-		if chatGPTKey != "" {
-			authMethod = "chatgptAuthTokens"
-			authKey = chatGPTKey
+		raw := os.Getenv(cfg.CodexChatGPTAuthEnv)
+		if raw != "" {
+			accessToken, accountID, err := parseChatGPTAuthEnv(raw)
+			if err != nil {
+				logger.Warn().Err(err).Msg("chatgpt_auth_env 파싱 실패, ~/.codex/auth.json 자동 감지로 폴백")
+			} else {
+				authMethod = "chatgptAuthTokens"
+				authKey = accessToken
+				authAccountID = accountID
+			}
 		}
 	}
 
@@ -713,7 +720,7 @@ func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger
 	opts := []CodexAppServerOption{
 		WithAppServerLogger(logger),
 		WithAppServerApprovalPolicy(approvalPolicy),
-		WithAppServerAuth(authMethod, authKey),
+		WithAppServerAuth(authMethod, authKey, authAccountID),
 	}
 
 	if cfg.CodexDefaultModel != "" {
@@ -721,6 +728,51 @@ func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger
 	}
 
 	return NewCodexAppServerProvider(cliPath, opts...)
+}
+
+// parseChatGPTAuthEnv는 chatgpt_auth_env 값(JSON)을 파싱해
+// access token과 account ID를 반환합니다.
+// 허용 키:
+//   - accessToken | access_token
+//   - chatgptAccountId | chatgpt_account_id | accountId | account_id
+func parseChatGPTAuthEnv(raw string) (accessToken string, accountID string, err error) {
+	type tokenPayload struct {
+		AccessTokenCamel string `json:"accessToken"`
+		AccessTokenSnake string `json:"access_token"`
+		ChatGPTAccountID string `json:"chatgptAccountId"`
+		ChatGPTAccountSN string `json:"chatgpt_account_id"`
+		AccountIDCamel   string `json:"accountId"`
+		AccountIDSnake   string `json:"account_id"`
+	}
+
+	var payload tokenPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return "", "", fmt.Errorf("JSON 파싱 실패: %w", err)
+	}
+
+	accessToken = payload.AccessTokenCamel
+	if accessToken == "" {
+		accessToken = payload.AccessTokenSnake
+	}
+	if accessToken == "" {
+		return "", "", fmt.Errorf("accessToken(access_token) 누락")
+	}
+
+	accountID = payload.ChatGPTAccountID
+	if accountID == "" {
+		accountID = payload.ChatGPTAccountSN
+	}
+	if accountID == "" {
+		accountID = payload.AccountIDCamel
+	}
+	if accountID == "" {
+		accountID = payload.AccountIDSnake
+	}
+	if accountID == "" {
+		return "", "", fmt.Errorf("chatgptAccountId(account_id) 누락")
+	}
+
+	return accessToken, accountID, nil
 }
 
 // readCodexAuthFile은 ~/.codex/auth.json에서 인증 정보를 읽습니다.

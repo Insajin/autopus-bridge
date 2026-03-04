@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -307,5 +308,85 @@ func TestConfig_GetAvailableProviders(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestProviderConfig_IsAvailable_AppServerWithCodexSavedAuth는
+// codex login(auth.json)만으로 app-server 모드가 사용 가능해지는지 검증합니다.
+func TestProviderConfig_IsAvailable_AppServerWithCodexSavedAuth(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	codexDir := filepath.Join(tmpHome, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf(".codex 디렉토리 생성 실패: %v", err)
+	}
+
+	authPath := filepath.Join(codexDir, "auth.json")
+	authJSON := `{"auth_mode":"chatgpt","tokens":{"access_token":"test-token"}}`
+	if err := os.WriteFile(authPath, []byte(authJSON), 0o644); err != nil {
+		t.Fatalf("auth.json 생성 실패: %v", err)
+	}
+
+	p := &ProviderConfig{
+		Mode:           "app-server",
+		CLIPath:        "sh",
+		APIKeyEnv:      "NONEXISTENT_OPENAI_API_KEY",
+		ChatGPTAuthEnv: "NONEXISTENT_CHATGPT_AUTH",
+	}
+
+	if !p.IsAvailable() {
+		t.Fatal("app-server가 codex saved auth로 available=true 이어야 합니다")
+	}
+}
+
+// TestConfig_Validate_CodexAppServerSavedAuth는 codex-only 환경에서
+// auth.json 기반 app-server 설정 검증이 통과하는지 확인합니다.
+func TestConfig_Validate_CodexAppServerSavedAuth(t *testing.T) {
+	tmpHome := t.TempDir()
+	t.Setenv("HOME", tmpHome)
+
+	codexDir := filepath.Join(tmpHome, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf(".codex 디렉토리 생성 실패: %v", err)
+	}
+
+	authPath := filepath.Join(codexDir, "auth.json")
+	authJSON := `{"auth_mode":"chatgpt","tokens":{"access_token":"test-token"}}`
+	if err := os.WriteFile(authPath, []byte(authJSON), 0o644); err != nil {
+		t.Fatalf("auth.json 생성 실패: %v", err)
+	}
+
+	disabled := false
+	cfg := &Config{
+		Providers: ProvidersConfig{
+			Claude: ProviderConfig{
+				Enabled: &disabled,
+			},
+			Gemini: ProviderConfig{
+				Enabled: &disabled,
+			},
+			Codex: ProviderConfig{
+				Mode:      "app-server",
+				CLIPath:   "sh",
+				APIKeyEnv: "NONEXISTENT_OPENAI_API_KEY",
+			},
+		},
+		Logging: LoggingConfig{
+			Level:  "info",
+			Format: "json",
+		},
+		Reconnection: ReconnectionConfig{
+			MaxAttempts: 1,
+		},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() 실패: %v", err)
+	}
+
+	providers := cfg.GetAvailableProviders()
+	if len(providers) != 1 || providers[0] != "openai" {
+		t.Fatalf("GetAvailableProviders() = %v, want [openai]", providers)
 	}
 }
