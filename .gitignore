@@ -1,6 +1,7 @@
 mcp-server
 autopus-bridge
 autopus-bridge-test
+autopus-bridge-latest
 *.exe
 dist/
 .moai/
