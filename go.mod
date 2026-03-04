@@ -11,8 +11,8 @@ require (
 	github.com/google/generative-ai-go v0.20.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	github.com/insajin/autopus-agent-protocol v0.4.0
-	github.com/insajin/autopus-codex-rpc v0.0.0
+	github.com/insajin/autopus-agent-protocol v0.6.0
+	github.com/insajin/autopus-codex-rpc v0.1.0
 	github.com/mark3labs/mcp-go v0.44.0
 	github.com/rs/zerolog v1.33.0
 	github.com/spf13/cobra v1.8.1
