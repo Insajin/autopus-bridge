@@ -21,7 +21,7 @@ builds:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
-      - -X main.date={{.Date}}
+      - -X main.buildDate={{.Date}}
 
   # autopus-mcp-server: MCP 서버 독립 바이너리 (Claude Code 플러그인용)
   - id: autopus-mcp-server
@@ -40,7 +40,7 @@ builds:
       - -s -w
       - -X main.version={{.Version}}
       - -X main.commit={{.ShortCommit}}
-      - -X main.date={{.Date}}
+      - -X main.buildDate={{.Date}}
 
 archives:
   # autopus-bridge 아카이브

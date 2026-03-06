@@ -131,7 +131,7 @@ func TestDo_ClientError(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 		resp := apiResponse{
 			Success: false,
-			Error:   "Resource not found",
+			Error:   apiErrorMessage("Resource not found"),
 		}
 		json.NewEncoder(w).Encode(resp)
 	})
@@ -143,6 +143,26 @@ func TestDo_ClientError(t *testing.T) {
 	_, err := client.Do(context.Background(), http.MethodGet, "/nonexistent", nil)
 	if err == nil {
 		t.Fatal("4xx 응답 시 에러가 반환되어야 합니다")
+	}
+}
+
+func TestDo_ClientError_ObjectPayload(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":false,"error":{"code":"NOT_FOUND","message":"Cannot GET /api/v1/agents"}}`))
+	})
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	_, err := client.Do(context.Background(), http.MethodGet, "/nonexistent", nil)
+	if err == nil {
+		t.Fatal("4xx 응답 시 에러가 반환되어야 합니다")
+	}
+	if got := err.Error(); got != "API 오류: Cannot GET /api/v1/agents" {
+		t.Fatalf("예상 에러 메시지와 다름: %s", got)
 	}
 }
 
@@ -210,13 +230,13 @@ func TestExecuteTask(t *testing.T) {
 // TestListAgents는 에이전트 목록 조회를 테스트합니다.
 func TestListAgents(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/agents" {
-			t.Errorf("예상 경로 /api/v1/agents, 실제: %s", r.URL.Path)
+		if r.URL.Path != "/api/v1/workspaces/ws-test-001/agents" {
+			t.Errorf("예상 경로 /api/v1/workspaces/ws-test-001/agents, 실제: %s", r.URL.Path)
 		}
 
 		resp := apiResponse{
 			Success: true,
-			Data:    json.RawMessage(`{"agents":[{"id":"agent-001","name":"Test Agent"}],"total":1}`),
+			Data:    json.RawMessage(`[{"id":"agent-001","name":"Test Agent"}]`),
 		}
 		json.NewEncoder(w).Encode(resp)
 	})
@@ -243,14 +263,13 @@ func TestListAgents(t *testing.T) {
 // TestListAgents_WithWorkspaceID는 workspace_id 파라미터를 테스트합니다.
 func TestListAgents_WithWorkspaceID(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		wsID := r.URL.Query().Get("workspace_id")
-		if wsID != "ws-001" {
-			t.Errorf("예상 workspace_id ws-001, 실제: %s", wsID)
+		if r.URL.Path != "/api/v1/workspaces/ws-001/agents" {
+			t.Errorf("예상 경로 /api/v1/workspaces/ws-001/agents, 실제: %s", r.URL.Path)
 		}
 
 		resp := apiResponse{
 			Success: true,
-			Data:    json.RawMessage(`{"agents":[],"total":0}`),
+			Data:    json.RawMessage(`[]`),
 		}
 		json.NewEncoder(w).Encode(resp)
 	})

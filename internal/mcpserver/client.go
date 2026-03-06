@@ -9,12 +9,46 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strings"
+	"net/url"
 	"time"
 
 	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/rs/zerolog"
 )
+
+type apiErrorMessage string
+
+func (e *apiErrorMessage) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*e = ""
+		return nil
+	}
+
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*e = apiErrorMessage(s)
+		return nil
+	}
+
+	var obj struct {
+		Message string `json:"message"`
+		Code    string `json:"code"`
+	}
+	if err := json.Unmarshal(data, &obj); err == nil {
+		switch {
+		case obj.Message != "":
+			*e = apiErrorMessage(obj.Message)
+		case obj.Code != "":
+			*e = apiErrorMessage(obj.Code)
+		default:
+			*e = ""
+		}
+		return nil
+	}
+
+	return fmt.Errorf("API error field 파싱 실패: %s", string(data))
+}
 
 // BackendClient는 브릿지의 인증 시스템을 재사용하는 Autopus 백엔드 API 클라이언트입니다.
 // TokenRefresher를 통해 JWT 토큰을 자동으로 관리합니다.
@@ -43,7 +77,7 @@ func NewBackendClient(baseURL string, tokenRefresher *auth.TokenRefresher, timeo
 type apiResponse struct {
 	Success bool            `json:"success"`
 	Data    json.RawMessage `json:"data,omitempty"`
-	Error   string          `json:"error,omitempty"`
+	Error   apiErrorMessage `json:"error,omitempty"`
 	Message string          `json:"message,omitempty"`
 }
 
@@ -103,10 +137,10 @@ func (c *BackendClient) Do(ctx context.Context, method, path string, body interf
 	if resp.StatusCode >= 400 {
 		errMsg := apiResp.Error
 		if errMsg == "" {
-			errMsg = apiResp.Message
+			errMsg = apiErrorMessage(apiResp.Message)
 		}
 		if errMsg == "" {
-			errMsg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			errMsg = apiErrorMessage(fmt.Sprintf("HTTP %d", resp.StatusCode))
 		}
 		return nil, fmt.Errorf("API 오류: %s", errMsg)
 	}
@@ -201,19 +235,50 @@ type ListAgentsResponse struct {
 	Total  int         `json:"total"`
 }
 
+func (r *ListAgentsResponse) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || bytes.Equal(data, []byte("null")) {
+		*r = ListAgentsResponse{}
+		return nil
+	}
+
+	type legacyListAgentsResponse ListAgentsResponse
+	var legacy legacyListAgentsResponse
+	if err := json.Unmarshal(data, &legacy); err == nil && legacy.Agents != nil {
+		*r = ListAgentsResponse(legacy)
+		if r.Total == 0 {
+			r.Total = len(r.Agents)
+		}
+		return nil
+	}
+
+	var agents []AgentInfo
+	if err := json.Unmarshal(data, &agents); err == nil {
+		r.Agents = agents
+		r.Total = len(agents)
+		return nil
+	}
+
+	return fmt.Errorf("에이전트 목록 응답 파싱 실패: %s", string(data))
+}
+
 // ListAgents는 사용 가능한 에이전트 목록을 조회합니다.
 // opts는 선택적 파라미터입니다: 첫 번째 값은 filter 문자열로 사용됩니다.
 func (c *BackendClient) ListAgents(ctx context.Context, workspaceID string, opts ...string) (*ListAgentsResponse, error) {
+	if workspaceID == "" && c.tokenRefresh != nil {
+		workspaceID = c.tokenRefresh.GetWorkspaceID()
+	}
+
 	path := "/api/v1/agents"
-	var queryParams []string
+	query := url.Values{}
 	if workspaceID != "" {
-		queryParams = append(queryParams, "workspace_id="+workspaceID)
+		path = "/api/v1/workspaces/" + url.PathEscape(workspaceID) + "/agents"
 	}
 	if len(opts) > 0 && opts[0] != "" {
-		queryParams = append(queryParams, "filter="+opts[0])
+		query.Set("filter", opts[0])
 	}
-	if len(queryParams) > 0 {
-		path += "?" + strings.Join(queryParams, "&")
+	if encoded := query.Encode(); encoded != "" {
+		path += "?" + encoded
 	}
 
 	resp, err := c.Do(ctx, http.MethodGet, path, nil)

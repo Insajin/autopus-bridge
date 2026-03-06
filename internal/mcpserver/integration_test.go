@@ -132,8 +132,8 @@ func standardMockHandler(t *testing.T) http.HandlerFunc {
 				Message:     fmt.Sprintf("Task submitted to agent %s", reqBody.AgentID),
 			})
 
-		// GET /api/v1/agents - list_agents
-		case method == http.MethodGet && strings.HasPrefix(path, "/api/v1/agents"):
+		// GET /api/v1/workspaces/{id}/agents - list_agents
+		case method == http.MethodGet && strings.HasPrefix(path, "/api/v1/workspaces/") && strings.HasSuffix(path, "/agents"):
 			writeAPISuccess(w, ListAgentsResponse{
 				Agents: []AgentInfo{
 					{ID: "agent-1", Name: "Code Reviewer", Description: "Automated code review"},
@@ -243,7 +243,7 @@ func writeAPISuccess(w http.ResponseWriter, data interface{}) {
 func writeAPIError(w http.ResponseWriter, statusCode int, errMsg string) {
 	resp := apiResponse{
 		Success: false,
-		Error:   errMsg,
+		Error:   apiErrorMessage(errMsg),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(statusCode)

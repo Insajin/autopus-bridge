@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.14.1] - 2026-03-06
+
+### Fixed
+
+- `execute` 명령이 최신 prod API 경로 `GET /api/v1/workspaces/:workspaceId/agents`와 배열형 응답을 올바르게 처리하도록 수정
+- 객체형 API 에러 응답(`{"error":{"code":...,"message":...}}`) 파싱 지원 추가
+- 빌드/릴리즈 ldflags를 `main.buildDate`에 주입하도록 수정하여 `version` 출력의 `Built` 값이 정상 표시되도록 수정
+
 ## [1.14.0] - 2026-03-06
 
 ### Added
@@ -220,6 +228,9 @@ Previously located at `github.com/anthropics/acos/cmd/local-agent-bridge`.
 - Protocol types extracted to separate SDK: `github.com/insajin/autopus-agent-protocol`
 - See [docs/MIGRATION.md](docs/MIGRATION.md) for upgrade instructions
 
+[1.14.1]: https://github.com/insajin/autopus-bridge/releases/tag/v1.14.1
+[1.14.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.14.0
+[1.13.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.13.0
 [1.9.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.9.0
 [1.8.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.8.0
 [1.7.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.7.0

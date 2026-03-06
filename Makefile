@@ -5,7 +5,7 @@ DATE    ?= $(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 LDFLAGS := -s -w \
 	-X main.version=$(VERSION) \
 	-X main.commit=$(COMMIT) \
-	-X main.date=$(DATE)
+	-X main.buildDate=$(DATE)
 
 BINARY := autopus-bridge
 
