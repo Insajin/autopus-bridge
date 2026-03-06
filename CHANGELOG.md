@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Agent Browser 프로토콜 타입과 메시지 상수를 `autopus-agent-protocol` 공용 SDK에서 직접 사용하도록 정리
+- `autopus-agent-protocol v0.8.0` 릴리스 이후 bridge 의존 버전을 후속 bump 해야 함
+
 ## [1.9.0] - 2026-03-04
 
 ### Added

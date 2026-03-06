@@ -261,9 +261,9 @@ func (r *Router) registerDefaultHandlers() {
 	r.RegisterHandler(ws.AgentMsgComputerSessionEnd, r.handleComputerSessionEnd)
 
 	// Agent Browser 핸들러 (SPEC-BROWSER-AGENT-001)
-	r.RegisterHandler(agentMsgBrowserSessionStart, r.handleBrowserSessionStart)
-	r.RegisterHandler(agentMsgBrowserAction, r.handleBrowserAction)
-	r.RegisterHandler(agentMsgBrowserSessionEnd, r.handleBrowserSessionEnd)
+	r.RegisterHandler(ws.AgentMsgBrowserSessionStart, r.handleBrowserSessionStart)
+	r.RegisterHandler(ws.AgentMsgBrowserAction, r.handleBrowserAction)
+	r.RegisterHandler(ws.AgentMsgBrowserSessionEnd, r.handleBrowserSessionEnd)
 
 	// MCP Codegen/Deploy 핸들러 (SPEC-SELF-EXPAND-001)
 	r.RegisterHandler(ws.AgentMsgMCPCodegenRequest, r.handleMCPCodegenRequest)
@@ -291,7 +291,6 @@ func (r *Router) HandleMessage(ctx context.Context, msg ws.AgentMessage) error {
 		log.Printf("[handler] 미등록 메시지 타입: type=%s", msg.Type)
 		return nil
 	}
-
 
 	if err := handler(ctx, msg); err != nil {
 		if r.onError != nil {
@@ -886,7 +885,7 @@ func (r *Router) OnReconnected(ctx context.Context) error {
 					URL:         session.URL,
 					Headless:    session.Headless,
 				}
-				if err := r.client.sendMessage(agentMsgBrowserSessionStart, sessionPayload); err != nil {
+				if err := r.client.sendMessage(ws.AgentMsgBrowserSessionStart, sessionPayload); err != nil {
 					log.Printf("[agent-browser] failed to restore session %s: %v", session.ID, err)
 					continue
 				}
@@ -897,7 +896,7 @@ func (r *Router) OnReconnected(ctx context.Context) error {
 				pending := session.DrainPendingResults()
 				for _, p := range pending {
 					if result, ok := p.Payload.(agentbrowser.BrowserResultPayload); ok {
-						if err := r.client.sendMessage(agentMsgBrowserResult, result); err != nil {
+						if err := r.client.sendMessage(ws.AgentMsgBrowserResult, result); err != nil {
 							log.Printf("[agent-browser] failed to resend pending result for session %s, re-queuing: %v",
 								session.ID, err)
 							session.QueueResult(result)
@@ -913,18 +912,6 @@ func (r *Router) OnReconnected(ctx context.Context) error {
 
 	return nil
 }
-
-// Agent Browser 메시지 타입 상수 (SPEC-BROWSER-AGENT-001).
-// autopus-agent-protocol 패키지에 정의될 때까지 로컬 상수를 유지한다.
-const (
-	agentMsgBrowserSessionStart = "browser_session_start"
-	agentMsgBrowserAction       = "browser_action"
-	agentMsgBrowserSessionEnd   = "browser_session_end"
-	agentMsgBrowserSessionReady = "browser_session_ready"
-	agentMsgBrowserResult       = "browser_result"
-	agentMsgBrowserNotAvailable = "browser_not_available"
-	agentMsgBrowserError        = "browser_error"
-)
 
 // handleBrowserSessionStart는 Agent Browser 세션 시작 메시지를 처리합니다 (SPEC-BROWSER-AGENT-001).
 func (r *Router) handleBrowserSessionStart(ctx context.Context, msg ws.AgentMessage) error {
@@ -952,9 +939,9 @@ func (r *Router) handleBrowserSessionStart(ctx context.Context, msg ws.AgentMess
 	result, err := r.agentBrowserHandler.HandleSessionStart(ctx, payload)
 	if err != nil {
 		// not_available 또는 에러 응답
-		msgType := agentMsgBrowserError
+		msgType := ws.AgentMsgBrowserError
 		if result != nil && result.Status == "not_available" {
-			msgType = agentMsgBrowserNotAvailable
+			msgType = ws.AgentMsgBrowserNotAvailable
 		}
 		if result != nil {
 			_ = r.client.sendMessage(msgType, result)
@@ -966,7 +953,7 @@ func (r *Router) handleBrowserSessionStart(ctx context.Context, msg ws.AgentMess
 	}
 
 	// browser_session_ready 응답
-	return r.client.sendMessage(agentMsgBrowserSessionReady, result)
+	return r.client.sendMessage(ws.AgentMsgBrowserSessionReady, result)
 }
 
 // handleBrowserAction은 Agent Browser 액션 메시지를 처리합니다 (SPEC-BROWSER-AGENT-001).
@@ -990,7 +977,7 @@ func (r *Router) handleBrowserAction(ctx context.Context, msg ws.AgentMessage) e
 			Error:       "Agent Browser 핸들러가 설정되지 않았습니다",
 			DurationMs:  0,
 		}
-		return r.client.sendMessage(agentMsgBrowserResult, resultPayload)
+		return r.client.sendMessage(ws.AgentMsgBrowserResult, resultPayload)
 	}
 
 	// 비동기로 액션 실행 (REQ-M3-04: 결과를 세션에 큐잉 후 전송)
@@ -1016,7 +1003,7 @@ func (r *Router) handleBrowserAction(ctx context.Context, msg ws.AgentMessage) e
 		}
 
 		// 전송 시도 - 성공 시 pending 큐에서 제거
-		if sendErr := r.client.sendMessage(agentMsgBrowserResult, resultPayload); sendErr == nil {
+		if sendErr := r.client.sendMessage(ws.AgentMsgBrowserResult, resultPayload); sendErr == nil {
 			if exists && session != nil {
 				session.DrainPendingResults()
 			}

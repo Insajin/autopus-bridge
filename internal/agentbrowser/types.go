@@ -2,38 +2,20 @@
 // AI 기반 웹 자동화를 제공한다.
 package agentbrowser
 
-import "time"
+import (
+	"time"
 
-// BrowserActionPayload는 백엔드에서 수신하는 브라우저 액션 요청이다.
-// autopus-agent-protocol 패키지에 정의될 때까지 로컬 복사본을 유지한다.
-type BrowserActionPayload struct {
-	ExecutionID string                 `json:"execution_id"`
-	SessionID   string                 `json:"session_id"`
-	Command     string                 `json:"command"`
-	Ref         *int                   `json:"ref,omitempty"`
-	Params      map[string]interface{} `json:"params,omitempty"`
-}
+	ws "github.com/insajin/autopus-agent-protocol"
+)
 
-// BrowserResultPayload는 브라우저 액션 결과를 서버로 전송하는 페이로드이다.
-type BrowserResultPayload struct {
-	ExecutionID string `json:"execution_id"`
-	SessionID   string `json:"session_id"`
-	Success     bool   `json:"success"`
-	Snapshot    string `json:"snapshot,omitempty"`
-	Screenshot  string `json:"screenshot,omitempty"`
-	Output      string `json:"output,omitempty"`
-	Error       string `json:"error,omitempty"`
-	DurationMs  int64  `json:"duration_ms"`
-}
+// BrowserActionPayload는 공용 protocol SDK 타입을 사용한다.
+type BrowserActionPayload = ws.BrowserActionPayload
 
-// BrowserSessionPayload는 브라우저 세션 관련 메시지 페이로드이다.
-type BrowserSessionPayload struct {
-	ExecutionID string `json:"execution_id"`
-	SessionID   string `json:"session_id"`
-	URL         string `json:"url,omitempty"`
-	Headless    bool   `json:"headless"`
-	Status      string `json:"status"` // starting, ready, busy, error, stopped
-}
+// BrowserResultPayload는 공용 protocol SDK 타입을 사용한다.
+type BrowserResultPayload = ws.BrowserResultPayload
+
+// BrowserSessionPayload는 공용 protocol SDK 타입을 사용한다.
+type BrowserSessionPayload = ws.BrowserSessionPayload
 
 // CommandResult는 agent-browser CLI 명령 실행 결과이다.
 type CommandResult struct {
