@@ -116,23 +116,65 @@ func (c *BackendClient) Do(ctx context.Context, method, path string, body interf
 
 // ExecuteTaskRequest는 태스크 실행 요청 파라미터입니다.
 type ExecuteTaskRequest struct {
-	AgentID     string   `json:"agent_id"`
-	Prompt      string   `json:"prompt"`
-	WorkspaceID string   `json:"workspace_id,omitempty"`
-	Tools       []string `json:"tools,omitempty"`
-	Model       string   `json:"model,omitempty"`
+	AgentID           string   `json:"agent_id"`
+	Prompt            string   `json:"prompt"`
+	WorkspaceID       string   `json:"workspace_id,omitempty"`
+	Provider          string   `json:"provider,omitempty"`
+	Tools             []string `json:"tools,omitempty"`
+	Model             string   `json:"model,omitempty"`
+	TimeoutSeconds    int      `json:"timeout_seconds,omitempty"`
+	Stream            bool     `json:"stream,omitempty"`
+	MaxTokens         int      `json:"max_tokens,omitempty"`
+	FallbackProviders []string `json:"fallback_providers,omitempty"`
 }
 
 // ExecuteTaskResponse는 태스크 실행 응답입니다.
 type ExecuteTaskResponse struct {
-	ExecutionID string `json:"execution_id"`
-	Status      string `json:"status"`
-	Message     string `json:"message,omitempty"`
+	ExecutionID string          `json:"execution_id"`
+	Status      string          `json:"status,omitempty"`
+	Message     string          `json:"message,omitempty"`
+	Provider    string          `json:"provider,omitempty"`
+	Result      json.RawMessage `json:"result,omitempty"`
 }
 
 // ExecuteTask는 Autopus 에이전트 태스크를 실행합니다.
 func (c *BackendClient) ExecuteTask(ctx context.Context, req *ExecuteTaskRequest) (*ExecuteTaskResponse, error) {
-	resp, err := c.Do(ctx, http.MethodPost, "/api/v1/executions", req)
+	if req == nil {
+		return nil, fmt.Errorf("태스크 실행 요청이 nil입니다")
+	}
+	workspaceID := req.WorkspaceID
+	if workspaceID == "" && c.tokenRefresh != nil {
+		workspaceID = c.tokenRefresh.GetWorkspaceID()
+	}
+	if workspaceID == "" {
+		return nil, fmt.Errorf("workspace_id is required")
+	}
+
+	body := struct {
+		AgentID           string   `json:"agent_id"`
+		Prompt            string   `json:"prompt"`
+		WorkspaceID       string   `json:"workspace_id,omitempty"`
+		Provider          string   `json:"provider,omitempty"`
+		Tools             []string `json:"tools,omitempty"`
+		TimeoutSeconds    int      `json:"timeout_seconds,omitempty"`
+		Stream            bool     `json:"stream,omitempty"`
+		Model             string   `json:"model,omitempty"`
+		MaxTokens         int      `json:"max_tokens,omitempty"`
+		FallbackProviders []string `json:"fallback_providers,omitempty"`
+	}{
+		AgentID:           req.AgentID,
+		Prompt:            req.Prompt,
+		WorkspaceID:       workspaceID,
+		Provider:          req.Provider,
+		Tools:             req.Tools,
+		TimeoutSeconds:    req.TimeoutSeconds,
+		Stream:            req.Stream,
+		Model:             req.Model,
+		MaxTokens:         req.MaxTokens,
+		FallbackProviders: req.FallbackProviders,
+	}
+
+	resp, err := c.Do(ctx, http.MethodPost, "/api/v1/workspaces/"+workspaceID+"/execute", body)
 	if err != nil {
 		return nil, err
 	}
@@ -203,11 +245,63 @@ func (c *BackendClient) GetExecutionStatus(ctx context.Context, executionID stri
 		return nil, err
 	}
 
-	var result ExecutionStatus
-	if err := json.Unmarshal(resp.Data, &result); err != nil {
+	result, err := normalizeExecutionStatus(resp.Data)
+	if err != nil {
 		return nil, fmt.Errorf("실행 상태 응답 파싱 실패: %w", err)
 	}
-	return &result, nil
+	if result.ExecutionID == "" {
+		result.ExecutionID = executionID
+	}
+	return result, nil
+}
+
+type executionStatusWire struct {
+	ExecutionID string          `json:"execution_id"`
+	ID          string          `json:"id"`
+	Status      string          `json:"status"`
+	Result      json.RawMessage `json:"result,omitempty"`
+	Output      json.RawMessage `json:"output,omitempty"`
+	Error       string          `json:"error,omitempty"`
+	ErrorMsg    *string         `json:"error_message,omitempty"`
+	CreatedAt   string          `json:"created_at,omitempty"`
+	UpdatedAt   string          `json:"updated_at,omitempty"`
+	CompletedAt string          `json:"completed_at,omitempty"`
+}
+
+func normalizeExecutionStatus(data json.RawMessage) (*ExecutionStatus, error) {
+	var wire executionStatusWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return nil, err
+	}
+
+	result := wire.Result
+	if len(result) == 0 {
+		result = wire.Output
+	}
+
+	errMsg := wire.Error
+	if errMsg == "" && wire.ErrorMsg != nil {
+		errMsg = *wire.ErrorMsg
+	}
+
+	executionID := wire.ExecutionID
+	if executionID == "" {
+		executionID = wire.ID
+	}
+
+	updatedAt := wire.UpdatedAt
+	if updatedAt == "" {
+		updatedAt = wire.CompletedAt
+	}
+
+	return &ExecutionStatus{
+		ExecutionID: executionID,
+		Status:      wire.Status,
+		Result:      result,
+		Error:       errMsg,
+		CreatedAt:   wire.CreatedAt,
+		UpdatedAt:   updatedAt,
+	}, nil
 }
 
 // ApproveExecutionRequest는 실행 승인/거부 요청입니다.
@@ -313,11 +407,11 @@ type SearchKnowledgeRequest struct {
 
 // KnowledgeResult는 검색 결과 항목입니다.
 type KnowledgeResult struct {
-	ID       string  `json:"id"`
-	Title    string  `json:"title"`
-	Content  string  `json:"content"`
-	Score    float64 `json:"score,omitempty"`
-	Source   string  `json:"source,omitempty"`
+	ID       string                 `json:"id"`
+	Title    string                 `json:"title"`
+	Content  string                 `json:"content"`
+	Score    float64                `json:"score,omitempty"`
+	Source   string                 `json:"source,omitempty"`
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
 

@@ -67,6 +67,16 @@ func (r *TokenRefresher) GetToken() (string, error) {
 	return r.creds.AccessToken, nil
 }
 
+// GetWorkspaceID returns the currently selected workspace ID from credentials.
+func (r *TokenRefresher) GetWorkspaceID() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.creds == nil {
+		return ""
+	}
+	return r.creds.WorkspaceID
+}
+
 // run은 토큰 만료 전 자동 갱신을 수행하는 루프입니다.
 func (r *TokenRefresher) run(ctx context.Context) {
 	for {

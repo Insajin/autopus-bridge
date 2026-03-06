@@ -158,8 +158,8 @@ func TestDo_BackendUnreachable(t *testing.T) {
 // TestExecuteTask는 태스크 실행 API를 테스트합니다.
 func TestExecuteTask(t *testing.T) {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v1/executions" {
-			t.Errorf("예상 경로 /api/v1/executions, 실제: %s", r.URL.Path)
+		if r.URL.Path != "/api/v1/workspaces/ws-test/execute" {
+			t.Errorf("예상 경로 /api/v1/workspaces/ws-test/execute, 실제: %s", r.URL.Path)
 		}
 		if r.Method != http.MethodPost {
 			t.Errorf("예상 메서드 POST, 실제: %s", r.Method)
@@ -173,10 +173,13 @@ func TestExecuteTask(t *testing.T) {
 		if req.AgentID != "agent-001" {
 			t.Errorf("예상 agent_id agent-001, 실제: %s", req.AgentID)
 		}
+		if req.Prompt != "Hello, agent!" {
+			t.Errorf("예상 prompt Hello, agent!, 실제: %s", req.Prompt)
+		}
 
 		resp := apiResponse{
 			Success: true,
-			Data:    json.RawMessage(`{"execution_id":"exec-001","status":"running"}`),
+			Data:    json.RawMessage(`{"execution_id":"exec-001","provider":"claude","result":{"output":"done"}}`),
 		}
 		json.NewEncoder(w).Encode(resp)
 	})
@@ -186,8 +189,9 @@ func TestExecuteTask(t *testing.T) {
 
 	client := newTestClient(server.URL)
 	result, err := client.ExecuteTask(context.Background(), &ExecuteTaskRequest{
-		AgentID: "agent-001",
-		Prompt:  "Hello, agent!",
+		WorkspaceID: "ws-test",
+		AgentID:     "agent-001",
+		Prompt:      "Hello, agent!",
 	})
 	if err != nil {
 		t.Fatalf("예상하지 못한 오류: %v", err)
@@ -195,8 +199,11 @@ func TestExecuteTask(t *testing.T) {
 	if result.ExecutionID != "exec-001" {
 		t.Errorf("예상 execution_id exec-001, 실제: %s", result.ExecutionID)
 	}
-	if result.Status != "running" {
-		t.Errorf("예상 status running, 실제: %s", result.Status)
+	if result.Provider != "claude" {
+		t.Errorf("예상 provider claude, 실제: %s", result.Provider)
+	}
+	if string(result.Result) != `{"output":"done"}` {
+		t.Errorf("예상 result {\"output\":\"done\"}, 실제: %s", string(result.Result))
 	}
 }
 
@@ -282,6 +289,37 @@ func TestGetExecutionStatus(t *testing.T) {
 	}
 	if result.Status != "completed" {
 		t.Errorf("예상 status completed, 실제: %s", result.Status)
+	}
+}
+
+func TestGetExecutionStatus_BackendAgentExecutionShape(t *testing.T) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := apiResponse{
+			Success: true,
+			Data:    json.RawMessage(`{"id":"exec-002","status":"failed","output":{"summary":"partial"},"error_message":"boom","completed_at":"2026-03-06T10:00:00Z"}`),
+		}
+		json.NewEncoder(w).Encode(resp)
+	})
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	client := newTestClient(server.URL)
+	result, err := client.GetExecutionStatus(context.Background(), "exec-002")
+	if err != nil {
+		t.Fatalf("예상하지 못한 오류: %v", err)
+	}
+	if result.ExecutionID != "exec-002" {
+		t.Fatalf("예상 execution_id exec-002, 실제: %s", result.ExecutionID)
+	}
+	if result.Error != "boom" {
+		t.Fatalf("예상 error boom, 실제: %s", result.Error)
+	}
+	if string(result.Result) != `{"summary":"partial"}` {
+		t.Fatalf("예상 result {\"summary\":\"partial\"}, 실제: %s", string(result.Result))
+	}
+	if result.UpdatedAt != "2026-03-06T10:00:00Z" {
+		t.Fatalf("예상 updated_at 2026-03-06T10:00:00Z, 실제: %s", result.UpdatedAt)
 	}
 }
 

@@ -7,10 +7,10 @@ description: >
   Use when executing tasks, checking status, or accessing knowledge base.
 allowed-tools: Bash Read Grep Glob
 metadata:
-  version: "1.0.0"
+  version: "1.1.0"
   category: "integration"
   status: "active"
-  updated: "2026-02-20"
+  updated: "2026-03-06"
   tags: "autopus, bridge, agent, task-execution, platform"
 ---
 
@@ -27,6 +27,9 @@ autopus-bridge status --json      # Full JSON status
 ### Task Execution
 ```bash
 autopus-bridge execute "<task description>"
+autopus-bridge execute "<task description>" --agent "<agent name>" --json
+autopus-bridge execute "<task description>" --wait --poll-interval 2s
+autopus-bridge execute "<task description>" --agent "<agent name>" --stream --provider claude --model "<model>" --tools bash,git --timeout 120 --max-tokens 4096
 ```
 
 ### Configuration
@@ -41,6 +44,37 @@ autopus-bridge tools check        # JSON tool status
 autopus-bridge up                 # All-in-one: login + setup + connect
 autopus-bridge up --force         # Re-run from scratch
 ```
+
+## Operating Model
+
+- `autopus-bridge` is the local execution bridge for Autopus. It is not a thin wrapper.
+- The bridge connects local AI providers, CLI tools, and MCP tools to the workspace.
+- Workspace state lives on the server. Local code execution and provider routing happen through the bridge.
+- Before assuming a capability exists, verify it with `autopus-bridge status --json`, `autopus-bridge tools check`, or local config inspection.
+
+## Agent Usage Rules
+
+- Treat Autopus as the primary operating environment for agent work.
+- Prefer workspace-scoped data first: `Knowledge Hub`, connected repositories, configured MCP tools.
+- If a capability is unavailable, state the limitation explicitly instead of implying hidden access.
+- Do not assume open internet access or arbitrary GitHub access just because the bridge is connected.
+
+## Knowledge Hub
+
+- `Knowledge Hub` is the workspace memory layer used for retrieval and agent context injection.
+- Retrieval may run in hybrid mode or keyword-fallback mode depending on server configuration and embedding availability.
+- Use retrieved workspace knowledge before concluding that information is missing.
+- If search results are weak, report that retrieval quality may be limited rather than inventing missing facts.
+
+## GitHub Access Constraints
+
+- GitHub access is workspace-scoped.
+- A bridge connection alone does not grant repository access.
+- Repository operations require:
+  1. an active workspace GitHub integration
+  2. one or more linked repositories
+  3. sufficient token scopes for the requested operation
+- If any of those are missing, explain that GitHub access is unavailable or partial.
 
 ---
 
@@ -98,7 +132,35 @@ Submit a task to the platform for AI agent execution.
 
 ```bash
 autopus-bridge execute "Analyze the login API for security vulnerabilities"
+autopus-bridge execute "Summarize recent PR failures" --agent "Engineering Manager" --json
+autopus-bridge execute "Run the weekly QA sweep" --agent "QA Lead" --wait --wait-timeout 15m
+autopus-bridge execute "Tail the next response live" --agent "Support Lead" --stream --provider claude --model claude-sonnet-4-20250514
 ```
+
+Behavior:
+- Uses the currently selected workspace unless `--workspace-id` is provided.
+- If `--agent-id` is omitted, the bridge resolves by `--agent` name or prompts for agent selection.
+- Prints an `Execution ID` and any immediate `result` returned by the server.
+
+Flags:
+- `--agent-id <ID>`: Target agent ID
+- `--agent <NAME>`: Target agent name
+- `--workspace-id <ID>`: Override workspace
+- `--provider <NAME>`: Preferred provider
+- `--model <NAME>`: Preferred model
+- `--tools <LIST>`: Allowed tools as comma-separated values or repeated flag
+- `--timeout <N>`: Timeout seconds
+- `--max-tokens <N>`: Maximum generated tokens
+- `--wait`: Poll execution status until a terminal state
+- `--poll-interval <DURATION>`: Poll interval such as `2s`
+- `--wait-timeout <DURATION>`: Maximum wait time such as `10m`
+- `--stream`: Execute through the SSE endpoint and print live output to stdout
+- `--provider <NAME>`: Preferred provider for both regular and streaming execution
+- `--model <NAME>`: Preferred model for both regular and streaming execution
+- `--tools <LIST>`: Allowed tools for both regular and streaming execution
+- `--timeout <N>`: Timeout seconds for both regular and streaming execution
+- `--max-tokens <N>`: Maximum generated tokens for both regular and streaming execution
+- `--json`: Structured output with `execution_id`, `workspace_id`, `agent_id`, `agent_name`, `status`, `provider`, `result`, `error`
 
 ### autopus-bridge config
 
@@ -142,11 +204,19 @@ Display version, commit hash, build date, and platform info.
 autopus-bridge status --simple
 
 # 2. Execute task
-autopus-bridge execute "Fix the authentication bug in login.go"
+autopus-bridge execute "Fix the authentication bug in login.go" --agent "Backend Engineer" --json
 
-# 3. Monitor status
+# 3. Inspect bridge state if needed
 autopus-bridge status --json
 ```
+
+Notes:
+- `execute` returns submission data immediately.
+- `execute --wait` polls execution state through the execution status API and stops on `completed`, `failed`, `rejected`, `cancelled`, or `approved`.
+- `execute --stream` starts a separate streaming execution path. It cannot be combined with `--wait` or `--json`.
+- `execute --stream` now forwards provider/model/tools/timeout/max-token preferences to the backend SSE execution path.
+- After a stream ends, the backend emits a final `summary` event. The CLI uses that summary and falls back to status lookup only if the summary event is unavailable.
+- `status --json` is useful for bridge health and aggregate counts, not per-execution polling.
 
 ### Pattern 2: First-Time Setup
 
@@ -183,6 +253,16 @@ Status JSON fields:
 - `tasks_completed` (number): Completed task count
 - `tasks_failed` (number): Failed task count
 
+Execute JSON fields:
+- `execution_id` (string): Submitted execution ID
+- `workspace_id` (string): Workspace used for submission
+- `agent_id` (string): Selected agent ID
+- `agent_name` (string): Selected agent name when known
+- `status` (string): Final execution status when `--wait` is used
+- `provider` (string): Provider chosen by the server when present
+- `result` (object|string): Immediate result payload returned by the server
+- `error` (string): Final error message when the execution ends unsuccessfully
+
 ### Text Outputs
 
 Default human-readable format. Use for display, not parsing.
@@ -199,6 +279,8 @@ Default human-readable format. Use for display, not parsing.
 | "disconnected" | Not connected to server | Run `autopus-bridge up` |
 | "token expired" | Auth token expired | Run `autopus-bridge login` |
 | "workspace not found" | No workspace selected | Run `autopus-bridge up` |
+| "사용 가능한 에이전트가 없습니다" | Workspace has no available agents | Create or enable an agent in the workspace |
+| "에이전트를 찾을 수 없습니다" | `--agent` name did not match any agent | Use `--agent-id` or choose the exact agent name |
 
 ### Recovery Pattern
 

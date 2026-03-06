@@ -29,6 +29,7 @@ func newTestTokenRefresher() *auth.TokenRefresher {
 	creds := &auth.Credentials{
 		AccessToken:  testToken,
 		RefreshToken: "test-refresh-token",
+		WorkspaceID:  "ws-1",
 		ExpiresAt:    time.Now().Add(1 * time.Hour), // 1시간 후 만료
 	}
 	return auth.NewTokenRefresher(creds)
@@ -118,8 +119,8 @@ func standardMockHandler(t *testing.T) http.HandlerFunc {
 		method := r.Method
 
 		switch {
-		// POST /api/v1/executions - execute_task
-		case method == http.MethodPost && path == "/api/v1/executions":
+		// POST /api/v1/workspaces/{id}/execute - execute_task
+		case method == http.MethodPost && strings.HasPrefix(path, "/api/v1/workspaces/") && strings.HasSuffix(path, "/execute"):
 			var reqBody ExecuteTaskRequest
 			if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
 				writeAPIError(w, http.StatusBadRequest, "invalid request body")
@@ -875,8 +876,8 @@ func TestIntegration_RequestParametersPassed(t *testing.T) {
 	}
 
 	// 요청 경로 검증
-	if capturedPath != "/api/v1/executions" {
-		t.Errorf("요청 경로 = %q, want %q", capturedPath, "/api/v1/executions")
+	if capturedPath != "/api/v1/workspaces/ws-99/execute" {
+		t.Errorf("요청 경로 = %q, want %q", capturedPath, "/api/v1/workspaces/ws-99/execute")
 	}
 
 	// 요청 본문 파라미터 검증
