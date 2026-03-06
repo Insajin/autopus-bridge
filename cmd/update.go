@@ -4,7 +4,13 @@
 package cmd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
 
 	"github.com/insajin/autopus-bridge/internal/updater"
 	"github.com/spf13/cobra"
@@ -13,7 +19,23 @@ import (
 const (
 	// githubRepo는 GitHub 저장소 경로입니다.
 	githubRepo = "Insajin/autopus-bridge"
+	// updateStopTimeout은 실행 중인 connect 프로세스의 정상 종료 대기 시간입니다.
+	updateStopTimeout = 20 * time.Second
+	// updateStopPollInterval은 종료 대기 중 상태 확인 간격입니다.
+	updateStopPollInterval = 250 * time.Millisecond
 )
+
+var (
+	updateSleep            = time.Sleep
+	updateExecCommand      = exec.Command
+	updateFindProcess      = os.FindProcess
+	updateProcessRunningFn = isProcessRunning
+)
+
+type runningConnectProcess struct {
+	PID       int
+	ServerURL string
+}
 
 // updateCmd는 최신 버전으로 업데이트하는 명령어입니다.
 var updateCmd = &cobra.Command{
@@ -49,6 +71,10 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	fmt.Println("최신 버전 확인 중...")
 
 	u := updater.New(version, githubRepo)
+	runningProc, err := detectRunningConnectProcess()
+	if err != nil {
+		return fmt.Errorf("실행 중인 connect 프로세스 확인 실패: %w", err)
+	}
 
 	release, hasUpdate, err := u.CheckForUpdate()
 	if err != nil {
@@ -64,14 +90,164 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 	fmt.Println("업데이트를 시작합니다...")
 	fmt.Println()
 
+	if runningProc != nil {
+		fmt.Printf("실행 중인 연결 프로세스 감지: PID %d\n", runningProc.PID)
+		fmt.Println("기존 연결을 정상 종료한 뒤 새 버전으로 다시 시작합니다...")
+		if err := stopRunningConnectProcess(runningProc.PID); err != nil {
+			return fmt.Errorf("연결 프로세스 종료 실패: %w", err)
+		}
+	}
+
 	if err := u.DownloadAndReplace(release); err != nil {
 		return fmt.Errorf("업데이트 실패: %w", err)
 	}
 
 	fmt.Printf("\n업데이트 완료: v%s -> %s\n", version, release.Version)
 	fmt.Println("새 버전이 적용되었습니다.")
+	if runningProc != nil {
+		if err := restartConnectProcess(runningProc); err != nil {
+			return fmt.Errorf("업데이트는 완료되었지만 연결 자동 복구 실패: %w", err)
+		}
+		fmt.Println("연결 프로세스를 새 버전으로 다시 시작했습니다.")
+	}
 
 	return nil
+}
+
+func detectRunningConnectProcess() (*runningConnectProcess, error) {
+	status, err := loadRawStatusInfo()
+	if err == nil && status != nil && status.Connected && status.PID > 0 &&
+		status.PID != os.Getpid() && updateProcessRunningFn(status.PID) {
+		return &runningConnectProcess{
+			PID:       status.PID,
+			ServerURL: status.ServerURL,
+		}, nil
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+
+	lockPath := filepath.Join(home, ".config", "autopus", connectLockFileName)
+	pid, err := readLockPID(lockPath)
+	if err != nil || pid <= 0 || pid == os.Getpid() || !updateProcessRunningFn(pid) {
+		return nil, nil
+	}
+
+	serverURL := ""
+	if status != nil {
+		serverURL = status.ServerURL
+	}
+
+	return &runningConnectProcess{
+		PID:       pid,
+		ServerURL: serverURL,
+	}, nil
+}
+
+func loadRawStatusInfo() (*StatusInfo, error) {
+	statusFile := getStatusFilePath()
+	data, err := os.ReadFile(statusFile)
+	if err != nil {
+		return nil, err
+	}
+
+	var status StatusInfo
+	if err := json.Unmarshal(data, &status); err != nil {
+		return nil, err
+	}
+
+	return &status, nil
+}
+
+func stopRunningConnectProcess(pid int) error {
+	proc, err := updateFindProcess(pid)
+	if err != nil {
+		return fmt.Errorf("프로세스 조회 실패: %w", err)
+	}
+
+	if err := proc.Signal(os.Interrupt); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("정상 종료 시그널 전송 실패: %w", err)
+	}
+
+	if waitForProcessExit(pid, updateStopTimeout) {
+		return nil
+	}
+
+	if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return fmt.Errorf("강제 종료 실패: %w", err)
+	}
+
+	if !waitForProcessExit(pid, 5*time.Second) {
+		return fmt.Errorf("프로세스 종료 대기 시간 초과 (PID: %d)", pid)
+	}
+
+	return nil
+}
+
+func waitForProcessExit(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !updateProcessRunningFn(pid) {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		updateSleep(updateStopPollInterval)
+	}
+}
+
+func restartConnectProcess(proc *runningConnectProcess) error {
+	execPath, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("현재 실행 파일 경로 확인 실패: %w", err)
+	}
+
+	execPath, err = filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return fmt.Errorf("실행 파일 경로 해석 실패: %w", err)
+	}
+
+	args := buildReconnectArgs(proc)
+	restartCmd := updateExecCommand(execPath, args...)
+	restartCmd.Env = os.Environ()
+
+	devNull, err := os.OpenFile(os.DevNull, os.O_RDWR, 0)
+	if err != nil {
+		return fmt.Errorf("출력 리디렉션 준비 실패: %w", err)
+	}
+	defer devNull.Close()
+
+	restartCmd.Stdin = devNull
+	restartCmd.Stdout = devNull
+	restartCmd.Stderr = devNull
+
+	if err := restartCmd.Start(); err != nil {
+		return fmt.Errorf("connect 재시작 실패: %w", err)
+	}
+
+	if restartCmd.Process != nil {
+		_ = restartCmd.Process.Release()
+	}
+
+	return nil
+}
+
+func buildReconnectArgs(proc *runningConnectProcess) []string {
+	args := make([]string, 0, 6)
+	if cfgFile != "" {
+		args = append(args, "--config", cfgFile)
+	}
+	if verbose {
+		args = append(args, "--verbose")
+	}
+	args = append(args, "connect")
+	if proc != nil && proc.ServerURL != "" {
+		args = append(args, "--server", proc.ServerURL)
+	}
+	return args
 }
 
 // CheckUpdateInBackground는 백그라운드에서 업데이트를 확인합니다.
