@@ -370,6 +370,58 @@ func TestRunChannelCreateJSON(t *testing.T) {
 	}
 }
 
+// TestRunChannelShow_InvalidChannelID는 유효하지 않은 channelID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunChannelShow_InvalidChannelID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runChannelShow(client, &buf, "bad/id", false)
+	if err == nil {
+		t.Error("유효하지 않은 channelID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunChannelDelete_InvalidChannelID는 유효하지 않은 channelID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunChannelDelete_InvalidChannelID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runChannelDelete(client, &buf, "bad id")
+	if err == nil {
+		t.Error("유효하지 않은 channelID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunChannelMembers_InvalidChannelID는 유효하지 않은 channelID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunChannelMembers_InvalidChannelID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runChannelMembers(client, &buf, "../bad", false)
+	if err == nil {
+		t.Error("유효하지 않은 channelID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunChannelConfig_InvalidChannelID는 유효하지 않은 channelID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunChannelConfig_InvalidChannelID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runChannelConfig(client, &buf, "id with space")
+	if err == nil {
+		t.Error("유효하지 않은 channelID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
 // TestRunChannelMembersJSON는 runChannelMembers의 JSON 출력 경로를 테스트합니다.
 func TestRunChannelMembersJSON(t *testing.T) {
 	members := []ChannelMember{

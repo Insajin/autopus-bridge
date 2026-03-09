@@ -14,6 +14,36 @@ import (
 	"github.com/insajin/autopus-bridge/internal/mcpserver"
 )
 
+// ValidateID는 ID 문자열이 허용된 형식인지 검사합니다.
+// UUID 및 슬러그 형식 (영문, 숫자, -, _)만 허용합니다.
+// 빈 문자열, 공백, 특수문자, 경로 순회 시도 등은 거부합니다.
+// @MX:ANCHOR: [AUTO] issue/channel/message/project cmd 모든 run* 함수에서 호출하는 ID 검증 게이트웨이
+// @MX:REASON: fan_in >= 14 (issue 7, channel 4, message 4 호출), 경로 순회 방어의 단일 진입점
+// @MX:SPEC: SPEC-CLI-003 C2 ID 검증 요구사항
+func ValidateID(id string) error {
+	if id == "" {
+		return fmt.Errorf("유효하지 않은 ID 형식입니다: 빈 문자열은 허용되지 않습니다")
+	}
+	for _, r := range id {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return fmt.Errorf("유효하지 않은 ID 형식입니다: 허용되지 않는 문자 %q 포함", r)
+		}
+	}
+	return nil
+}
+
+// DefaultAPITimeout은 CLI API 호출의 기본 타임아웃입니다.
+const DefaultAPITimeout = 10 * time.Second
+
+// NewContextWithTimeout은 타임아웃이 설정된 컨텍스트와 취소 함수를 반환합니다.
+// 기본 사용: ctx, cancel := NewContextWithTimeout(DefaultAPITimeout); defer cancel()
+// @MX:ANCHOR: [AUTO] 모든 run* API 호출 함수의 컨텍스트 타임아웃 생성 표준 패턴
+// @MX:REASON: fan_in >= 20 (issue 7, channel 6, message 4, project 3 호출), W5 context timeout 보안 요구사항의 단일 진입점
+// @MX:SPEC: SPEC-CLI-003 W5 컨텍스트 타임아웃 요구사항
+func NewContextWithTimeout(timeout time.Duration) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), timeout)
+}
+
 // Client는 CLI 명령에서 사용하는 API 클라이언트입니다.
 // BackendClient를 감싸 편의 메서드와 JSON 출력 제어를 제공합니다.
 // Meta(페이지네이션)를 포함한 전체 API 응답을 파싱하기 위해 내부 HTTP 클라이언트를 직접 사용합니다.

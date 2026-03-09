@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -104,7 +103,10 @@ func runProjectList(client *apiclient.Client, out io.Writer, jsonOutput bool) er
 	workspaceID := client.WorkspaceID()
 	path := "/api/v1/workspaces/" + workspaceID + "/projects"
 
-	projects, err := apiclient.DoList[Project](client, context.Background(), "GET", path, nil)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	projects, err := apiclient.DoList[Project](client, ctx, "GET", path, nil)
 	if err != nil {
 		return fmt.Errorf("프로젝트 목록 조회 실패: %w", err)
 	}
@@ -130,7 +132,14 @@ func runProjectList(client *apiclient.Client, out io.Writer, jsonOutput bool) er
 
 // runProjectShow는 프로젝트 상세 정보를 출력합니다.
 func runProjectShow(client *apiclient.Client, out io.Writer, projectID string, jsonOutput bool) error {
-	proj, err := apiclient.Do[Project](client, context.Background(), "GET", "/api/v1/projects/"+projectID, nil)
+	if err := apiclient.ValidateID(projectID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	proj, err := apiclient.Do[Project](client, ctx, "GET", "/api/v1/projects/"+projectID, nil)
 	if err != nil {
 		return fmt.Errorf("프로젝트 조회 실패: %w", err)
 	}
@@ -163,7 +172,10 @@ func runProjectCreate(client *apiclient.Client, out io.Writer, name, prefix stri
 		body["prefix"] = prefix
 	}
 
-	proj, err := apiclient.Do[Project](client, context.Background(), "POST", path, body)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	proj, err := apiclient.Do[Project](client, ctx, "POST", path, body)
 	if err != nil {
 		return fmt.Errorf("프로젝트 생성 실패: %w", err)
 	}

@@ -274,6 +274,58 @@ func TestRunMessageAgentMessagesJSON(t *testing.T) {
 	}
 }
 
+// TestRunMessageList_InvalidChannelID는 유효하지 않은 channelID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunMessageList_InvalidChannelID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runMessageList(client, &buf, "bad/id", 0, "", false)
+	if err == nil {
+		t.Error("유효하지 않은 channelID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunMessageSend_InvalidChannelID는 유효하지 않은 channelID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunMessageSend_InvalidChannelID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runMessageSend(client, &buf, "bad id", "내용")
+	if err == nil {
+		t.Error("유효하지 않은 channelID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunMessageThread_InvalidMessageID는 유효하지 않은 messageID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunMessageThread_InvalidMessageID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runMessageThread(client, &buf, "../bad", false)
+	if err == nil {
+		t.Error("유효하지 않은 messageID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunMessageAgentMessages_InvalidChannelID는 유효하지 않은 channelID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunMessageAgentMessages_InvalidChannelID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runMessageAgentMessages(client, &buf, "ch id", false)
+	if err == nil {
+		t.Error("유효하지 않은 channelID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
 func TestRunMessageContentTruncation(t *testing.T) {
 	// 80자 초과 콘텐츠는 잘려야 합니다
 	longContent := strings.Repeat("A", 100)

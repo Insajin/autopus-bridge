@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/url"
@@ -224,6 +223,11 @@ func init() {
 // runIssueList는 프로젝트의 이슈 목록을 조회하고 출력합니다.
 // status, priority, type 파라미터가 비어있지 않으면 쿼리 파라미터로 전달합니다.
 func runIssueList(client *apiclient.Client, out io.Writer, projectID, status, priority, issueType string, jsonOutput bool) error {
+	// ID 유효성 검사
+	if err := apiclient.ValidateID(projectID); err != nil {
+		return err
+	}
+
 	// 쿼리 파라미터 구성
 	params := url.Values{}
 	if status != "" {
@@ -241,7 +245,10 @@ func runIssueList(client *apiclient.Client, out io.Writer, projectID, status, pr
 		path += "?" + params.Encode()
 	}
 
-	issues, err := apiclient.DoList[Issue](client, context.Background(), "GET", path, nil)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	issues, err := apiclient.DoList[Issue](client, ctx, "GET", path, nil)
 	if err != nil {
 		return fmt.Errorf("이슈 목록 조회 실패: %w", err)
 	}
@@ -269,7 +276,14 @@ func runIssueList(client *apiclient.Client, out io.Writer, projectID, status, pr
 
 // runIssueShow는 이슈 상세 정보를 출력합니다.
 func runIssueShow(client *apiclient.Client, out io.Writer, issueID string, jsonOutput bool) error {
-	iss, err := apiclient.Do[Issue](client, context.Background(), "GET", "/api/v1/issues/"+issueID, nil)
+	if err := apiclient.ValidateID(issueID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	iss, err := apiclient.Do[Issue](client, ctx, "GET", "/api/v1/issues/"+issueID, nil)
 	if err != nil {
 		return fmt.Errorf("이슈 조회 실패: %w", err)
 	}
@@ -295,6 +309,10 @@ func runIssueShow(client *apiclient.Client, out io.Writer, issueID string, jsonO
 
 // runIssueCreate는 새 이슈를 생성하고 결과를 출력합니다.
 func runIssueCreate(client *apiclient.Client, out io.Writer, projectID, title, description, priority, issueType string, jsonOutput bool) error {
+	if err := apiclient.ValidateID(projectID); err != nil {
+		return err
+	}
+
 	path := "/api/v1/projects/" + projectID + "/issues"
 
 	// 요청 본문 구성 (비어있지 않은 필드만 포함)
@@ -309,7 +327,10 @@ func runIssueCreate(client *apiclient.Client, out io.Writer, projectID, title, d
 		body["type"] = issueType
 	}
 
-	iss, err := apiclient.Do[Issue](client, context.Background(), "POST", path, body)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	iss, err := apiclient.Do[Issue](client, ctx, "POST", path, body)
 	if err != nil {
 		return fmt.Errorf("이슈 생성 실패: %w", err)
 	}
@@ -332,6 +353,10 @@ func runIssueCreate(client *apiclient.Client, out io.Writer, projectID, title, d
 // runIssueUpdate는 이슈를 수정하고 결과를 출력합니다.
 // 비어있지 않은 필드만 요청 본문에 포함합니다.
 func runIssueUpdate(client *apiclient.Client, out io.Writer, issueID, title, description, priority string, jsonOutput bool) error {
+	if err := apiclient.ValidateID(issueID); err != nil {
+		return err
+	}
+
 	// 수정할 필드만 포함
 	body := map[string]string{}
 	if title != "" {
@@ -344,7 +369,10 @@ func runIssueUpdate(client *apiclient.Client, out io.Writer, issueID, title, des
 		body["priority"] = priority
 	}
 
-	iss, err := apiclient.Do[Issue](client, context.Background(), "PATCH", "/api/v1/issues/"+issueID, body)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	iss, err := apiclient.Do[Issue](client, ctx, "PATCH", "/api/v1/issues/"+issueID, body)
 	if err != nil {
 		return fmt.Errorf("이슈 수정 실패: %w", err)
 	}
@@ -363,9 +391,16 @@ func runIssueUpdate(client *apiclient.Client, out io.Writer, issueID, title, des
 
 // runIssueAssign은 이슈 담당자를 지정하고 결과를 출력합니다.
 func runIssueAssign(client *apiclient.Client, out io.Writer, issueID, agentID string, jsonOutput bool) error {
+	if err := apiclient.ValidateID(issueID); err != nil {
+		return err
+	}
+
 	body := map[string]string{"assignee_id": agentID}
 
-	iss, err := apiclient.Do[Issue](client, context.Background(), "PATCH", "/api/v1/issues/"+issueID+"/assignee", body)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	iss, err := apiclient.Do[Issue](client, ctx, "PATCH", "/api/v1/issues/"+issueID+"/assignee", body)
 	if err != nil {
 		return fmt.Errorf("이슈 담당자 지정 실패: %w", err)
 	}
@@ -383,7 +418,14 @@ func runIssueAssign(client *apiclient.Client, out io.Writer, issueID, agentID st
 
 // runIssueCommentList는 이슈 댓글 목록을 조회하고 출력합니다.
 func runIssueCommentList(client *apiclient.Client, out io.Writer, issueID string, jsonOutput bool) error {
-	comments, err := apiclient.DoList[IssueComment](client, context.Background(), "GET", "/api/v1/issues/"+issueID+"/comments", nil)
+	if err := apiclient.ValidateID(issueID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	comments, err := apiclient.DoList[IssueComment](client, ctx, "GET", "/api/v1/issues/"+issueID+"/comments", nil)
 	if err != nil {
 		return fmt.Errorf("댓글 목록 조회 실패: %w", err)
 	}
@@ -414,9 +456,16 @@ func runIssueCommentList(client *apiclient.Client, out io.Writer, issueID string
 
 // runIssueCommentAdd는 이슈에 댓글을 추가하고 결과를 출력합니다.
 func runIssueCommentAdd(client *apiclient.Client, out io.Writer, issueID, content string, jsonOutput bool) error {
+	if err := apiclient.ValidateID(issueID); err != nil {
+		return err
+	}
+
 	body := map[string]string{"content": content}
 
-	comment, err := apiclient.Do[IssueComment](client, context.Background(), "POST", "/api/v1/issues/"+issueID+"/comments", body)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	comment, err := apiclient.Do[IssueComment](client, ctx, "POST", "/api/v1/issues/"+issueID+"/comments", body)
 	if err != nil {
 		return fmt.Errorf("댓글 추가 실패: %w", err)
 	}

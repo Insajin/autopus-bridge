@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -164,9 +163,16 @@ func buildMessagePath(channelID string, limit int, before string) string {
 
 // runMessageList는 채널 메시지 목록을 조회하고 출력합니다.
 func runMessageList(client *apiclient.Client, out io.Writer, channelID string, limit int, before string, jsonOutput bool) error {
+	if err := apiclient.ValidateID(channelID); err != nil {
+		return err
+	}
+
 	path := buildMessagePath(channelID, limit, before)
 
-	resp, err := apiclient.Do[messageListResponse](client, context.Background(), "GET", path, nil)
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	resp, err := apiclient.Do[messageListResponse](client, ctx, "GET", path, nil)
 	if err != nil {
 		return fmt.Errorf("메시지 목록 조회 실패: %w", err)
 	}
@@ -181,9 +187,16 @@ func runMessageList(client *apiclient.Client, out io.Writer, channelID string, l
 
 // runMessageSend는 채널에 메시지를 전송합니다.
 func runMessageSend(client *apiclient.Client, out io.Writer, channelID, content string) error {
+	if err := apiclient.ValidateID(channelID); err != nil {
+		return err
+	}
+
 	body := map[string]string{"content": content}
 
-	msg, err := apiclient.Do[Message](client, context.Background(), "POST",
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	msg, err := apiclient.Do[Message](client, ctx, "POST",
 		"/api/v1/channels/"+channelID+"/messages", body)
 	if err != nil {
 		return fmt.Errorf("메시지 전송 실패: %w", err)
@@ -199,7 +212,14 @@ func runMessageSend(client *apiclient.Client, out io.Writer, channelID, content 
 
 // runMessageThread는 메시지 스레드를 조회하고 출력합니다.
 func runMessageThread(client *apiclient.Client, out io.Writer, messageID string, jsonOutput bool) error {
-	resp, err := apiclient.Do[messageListResponse](client, context.Background(), "GET",
+	if err := apiclient.ValidateID(messageID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	resp, err := apiclient.Do[messageListResponse](client, ctx, "GET",
 		"/api/v1/messages/"+messageID+"/thread", nil)
 	if err != nil {
 		return fmt.Errorf("메시지 스레드 조회 실패: %w", err)
@@ -215,7 +235,14 @@ func runMessageThread(client *apiclient.Client, out io.Writer, messageID string,
 
 // runMessageAgentMessages는 채널의 에이전트 메시지를 조회하고 출력합니다.
 func runMessageAgentMessages(client *apiclient.Client, out io.Writer, channelID string, jsonOutput bool) error {
-	resp, err := apiclient.Do[messageListResponse](client, context.Background(), "GET",
+	if err := apiclient.ValidateID(channelID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	resp, err := apiclient.Do[messageListResponse](client, ctx, "GET",
 		"/api/v1/channels/"+channelID+"/agent-messages", nil)
 	if err != nil {
 		return fmt.Errorf("에이전트 메시지 조회 실패: %w", err)

@@ -3,7 +3,6 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -176,9 +175,12 @@ func init() {
 func runChannelList(client *apiclient.Client, out io.Writer, channelType string, jsonOutput bool) error {
 	workspaceID := client.WorkspaceID()
 
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
 	// DM 채널 조회
 	if channelType == "dm" {
-		dmChannels, err := apiclient.DoList[DMChannel](client, context.Background(), "GET",
+		dmChannels, err := apiclient.DoList[DMChannel](client, ctx, "GET",
 			"/api/v1/workspaces/"+workspaceID+"/dm-channels", nil)
 		if err != nil {
 			return fmt.Errorf("DM 채널 목록 조회 실패: %w", err)
@@ -203,7 +205,7 @@ func runChannelList(client *apiclient.Client, out io.Writer, channelType string,
 	}
 
 	// 일반 채널 조회 (기본/all/group)
-	channels, err := apiclient.DoList[ChannelWithUnreadCount](client, context.Background(), "GET",
+	channels, err := apiclient.DoList[ChannelWithUnreadCount](client, ctx, "GET",
 		"/api/v1/workspaces/"+workspaceID+"/channels", nil)
 	if err != nil {
 		return fmt.Errorf("채널 목록 조회 실패: %w", err)
@@ -235,7 +237,14 @@ func runChannelList(client *apiclient.Client, out io.Writer, channelType string,
 
 // runChannelShow는 채널 상세 정보를 출력합니다.
 func runChannelShow(client *apiclient.Client, out io.Writer, channelID string, jsonOutput bool) error {
-	ch, err := apiclient.Do[Channel](client, context.Background(), "GET", "/api/v1/channels/"+channelID, nil)
+	if err := apiclient.ValidateID(channelID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	ch, err := apiclient.Do[Channel](client, ctx, "GET", "/api/v1/channels/"+channelID, nil)
 	if err != nil {
 		return fmt.Errorf("채널 조회 실패: %w", err)
 	}
@@ -260,7 +269,10 @@ func runChannelCreate(client *apiclient.Client, out io.Writer, name, desc string
 	workspaceID := client.WorkspaceID()
 	body := map[string]string{"name": name, "description": desc}
 
-	ch, err := apiclient.Do[Channel](client, context.Background(), "POST",
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	ch, err := apiclient.Do[Channel](client, ctx, "POST",
 		"/api/v1/workspaces/"+workspaceID+"/channels", body)
 	if err != nil {
 		return fmt.Errorf("채널 생성 실패: %w", err)
@@ -280,7 +292,14 @@ func runChannelCreate(client *apiclient.Client, out io.Writer, name, desc string
 
 // runChannelDelete는 채널을 삭제합니다.
 func runChannelDelete(client *apiclient.Client, out io.Writer, channelID string) error {
-	_, err := apiclient.Do[map[string]interface{}](client, context.Background(), "DELETE",
+	if err := apiclient.ValidateID(channelID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	_, err := apiclient.Do[map[string]interface{}](client, ctx, "DELETE",
 		"/api/v1/channels/"+channelID, nil)
 	if err != nil {
 		return fmt.Errorf("채널 삭제 실패: %w", err)
@@ -292,7 +311,14 @@ func runChannelDelete(client *apiclient.Client, out io.Writer, channelID string)
 
 // runChannelMembers는 채널 멤버 목록을 출력합니다.
 func runChannelMembers(client *apiclient.Client, out io.Writer, channelID string, jsonOutput bool) error {
-	members, err := apiclient.DoList[ChannelMember](client, context.Background(), "GET",
+	if err := apiclient.ValidateID(channelID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	members, err := apiclient.DoList[ChannelMember](client, ctx, "GET",
 		"/api/v1/channels/"+channelID+"/members", nil)
 	if err != nil {
 		return fmt.Errorf("채널 멤버 조회 실패: %w", err)
@@ -314,7 +340,14 @@ func runChannelMembers(client *apiclient.Client, out io.Writer, channelID string
 // runChannelConfig는 채널 설정을 JSON 형식으로 출력합니다.
 // config는 동적 구조이므로 항상 JSON으로 출력합니다.
 func runChannelConfig(client *apiclient.Client, out io.Writer, channelID string) error {
-	config, err := apiclient.Do[ChannelConfig](client, context.Background(), "GET",
+	if err := apiclient.ValidateID(channelID); err != nil {
+		return err
+	}
+
+	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
+	defer cancel()
+
+	config, err := apiclient.Do[ChannelConfig](client, ctx, "GET",
 		"/api/v1/channels/"+channelID+"/config", nil)
 	if err != nil {
 		return fmt.Errorf("채널 설정 조회 실패: %w", err)

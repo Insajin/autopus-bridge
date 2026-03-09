@@ -227,6 +227,19 @@ func TestRunProjectCreateJSON(t *testing.T) {
 	}
 }
 
+// TestRunProjectShow_InvalidProjectID는 유효하지 않은 projectID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunProjectShow_InvalidProjectID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runProjectShow(client, &buf, "bad/id", false)
+	if err == nil {
+		t.Error("유효하지 않은 projectID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
 func TestRunProjectCreateWithPrefix(t *testing.T) {
 	proj := Project{
 		ID:     "proj-new-5678",

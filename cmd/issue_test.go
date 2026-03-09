@@ -419,6 +419,102 @@ func TestRunIssueUpdateAllFields(t *testing.T) {
 	}
 }
 
+// TestRunIssueList_InvalidProjectID는 유효하지 않은 projectID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunIssueList_InvalidProjectID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	invalidIDs := []string{"", "id/slash", "id with space", "../etc/passwd"}
+	for _, id := range invalidIDs {
+		err := runIssueList(client, &buf, id, "", "", "", false)
+		if err == nil {
+			t.Errorf("유효하지 않은 projectID %q에서 에러가 발생해야 합니다", id)
+			continue
+		}
+		if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+			t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+		}
+	}
+}
+
+// TestRunIssueShow_InvalidIssueID는 유효하지 않은 issueID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunIssueShow_InvalidIssueID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runIssueShow(client, &buf, "../bad", false)
+	if err == nil {
+		t.Error("유효하지 않은 issueID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunIssueCreate_InvalidProjectID는 유효하지 않은 projectID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunIssueCreate_InvalidProjectID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runIssueCreate(client, &buf, "bad/id", "제목", "", "", "", false)
+	if err == nil {
+		t.Error("유효하지 않은 projectID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunIssueUpdate_InvalidIssueID는 유효하지 않은 issueID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunIssueUpdate_InvalidIssueID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runIssueUpdate(client, &buf, "bad id", "", "", "", false)
+	if err == nil {
+		t.Error("유효하지 않은 issueID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunIssueAssign_InvalidIssueID는 유효하지 않은 issueID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunIssueAssign_InvalidIssueID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runIssueAssign(client, &buf, "bad.id", "agent-1", false)
+	if err == nil {
+		t.Error("유효하지 않은 issueID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunIssueCommentList_InvalidIssueID는 유효하지 않은 issueID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunIssueCommentList_InvalidIssueID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runIssueCommentList(client, &buf, "bad id", false)
+	if err == nil {
+		t.Error("유효하지 않은 issueID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
+// TestRunIssueCommentAdd_InvalidIssueID는 유효하지 않은 issueID에서 ValidateID 에러를 반환하는지 검증합니다.
+func TestRunIssueCommentAdd_InvalidIssueID(t *testing.T) {
+	client := makeTestClient("http://localhost:9999", "ws-1")
+	var buf bytes.Buffer
+
+	err := runIssueCommentAdd(client, &buf, "../bad", "내용", false)
+	if err == nil {
+		t.Error("유효하지 않은 issueID에서 에러가 발생해야 합니다")
+	} else if !strings.Contains(err.Error(), "유효하지 않은 ID") {
+		t.Errorf("에러에 '유효하지 않은 ID'가 없습니다: %v", err)
+	}
+}
+
 func TestRunIssueCommentAdd(t *testing.T) {
 	comment := IssueComment{
 		ID:      "cmt-new-1",
