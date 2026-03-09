@@ -22,7 +22,7 @@ func TestRunMessageList(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(messages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: messages}))
 	}))
 	defer srv.Close()
 
@@ -55,7 +55,7 @@ func TestRunMessageListWithParams(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(messages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: messages}))
 	}))
 	defer srv.Close()
 
@@ -80,7 +80,7 @@ func TestRunMessageListJSON(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(messages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: messages}))
 	}))
 	defer srv.Close()
 
@@ -142,7 +142,7 @@ func TestRunMessageThread(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(threadMessages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: threadMessages}))
 	}))
 	defer srv.Close()
 
@@ -174,7 +174,7 @@ func TestRunMessageAgentMessages(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(agentMessages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: agentMessages}))
 	}))
 	defer srv.Close()
 
@@ -220,7 +220,7 @@ func TestRunMessageThreadJSON(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(threadMessages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: threadMessages}))
 	}))
 	defer srv.Close()
 
@@ -251,7 +251,7 @@ func TestRunMessageAgentMessagesJSON(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(agentMessages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: agentMessages}))
 	}))
 	defer srv.Close()
 
@@ -283,7 +283,7 @@ func TestRunMessageContentTruncation(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write(buildAPIResponse(messages))
+		w.Write(buildAPIResponse(messageListResponse{Messages: messages}))
 	}))
 	defer srv.Close()
 

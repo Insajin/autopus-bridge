@@ -29,6 +29,14 @@ type MessageWithUser struct {
 	UserDisplayName string `json:"user_display_name,omitempty"`
 }
 
+// messageListResponse는 메시지 목록 API의 중첩 응답 구조입니다.
+// 백엔드가 {data: {messages: [], has_more, first_unread_id}} 형태로 응답합니다.
+type messageListResponse struct {
+	Messages      []MessageWithUser `json:"messages"`
+	HasMore       bool              `json:"has_more"`
+	FirstUnreadID *string           `json:"first_unread_id"`
+}
+
 var (
 	messageJSONOutput bool
 	messageLimit      int
@@ -158,16 +166,16 @@ func buildMessagePath(channelID string, limit int, before string) string {
 func runMessageList(client *apiclient.Client, out io.Writer, channelID string, limit int, before string, jsonOutput bool) error {
 	path := buildMessagePath(channelID, limit, before)
 
-	messages, err := apiclient.DoList[MessageWithUser](client, context.Background(), "GET", path, nil)
+	resp, err := apiclient.Do[messageListResponse](client, context.Background(), "GET", path, nil)
 	if err != nil {
 		return fmt.Errorf("메시지 목록 조회 실패: %w", err)
 	}
 
 	if jsonOutput {
-		return apiclient.PrintJSON(out, messages)
+		return apiclient.PrintJSON(out, resp.Messages)
 	}
 
-	printMessageTable(out, messages)
+	printMessageTable(out, resp.Messages)
 	return nil
 }
 
@@ -191,33 +199,33 @@ func runMessageSend(client *apiclient.Client, out io.Writer, channelID, content 
 
 // runMessageThread는 메시지 스레드를 조회하고 출력합니다.
 func runMessageThread(client *apiclient.Client, out io.Writer, messageID string, jsonOutput bool) error {
-	messages, err := apiclient.DoList[MessageWithUser](client, context.Background(), "GET",
+	resp, err := apiclient.Do[messageListResponse](client, context.Background(), "GET",
 		"/api/v1/messages/"+messageID+"/thread", nil)
 	if err != nil {
 		return fmt.Errorf("메시지 스레드 조회 실패: %w", err)
 	}
 
 	if jsonOutput {
-		return apiclient.PrintJSON(out, messages)
+		return apiclient.PrintJSON(out, resp.Messages)
 	}
 
-	printMessageTable(out, messages)
+	printMessageTable(out, resp.Messages)
 	return nil
 }
 
 // runMessageAgentMessages는 채널의 에이전트 메시지를 조회하고 출력합니다.
 func runMessageAgentMessages(client *apiclient.Client, out io.Writer, channelID string, jsonOutput bool) error {
-	messages, err := apiclient.DoList[MessageWithUser](client, context.Background(), "GET",
+	resp, err := apiclient.Do[messageListResponse](client, context.Background(), "GET",
 		"/api/v1/channels/"+channelID+"/agent-messages", nil)
 	if err != nil {
 		return fmt.Errorf("에이전트 메시지 조회 실패: %w", err)
 	}
 
 	if jsonOutput {
-		return apiclient.PrintJSON(out, messages)
+		return apiclient.PrintJSON(out, resp.Messages)
 	}
 
-	printMessageTable(out, messages)
+	printMessageTable(out, resp.Messages)
 	return nil
 }
 
