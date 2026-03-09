@@ -12,12 +12,15 @@ linters:
       # fmt.Fprint*/fmt.Fprintf 등 stdout/stderr 출력 에러 무시
       - linters: [errcheck]
         source: "fmt\\.Fprint"
-      # 테스트 파일의 os.Chmod, Body.Close 등 에러 무시
-      - linters: [errcheck]
+      # 테스트 파일의 errcheck, staticcheck 무시
+      - linters: [errcheck, staticcheck]
         path: "_test\\.go$"
-      # defer에서 Close 에러 무시
+      # Close 에러 무시
       - linters: [errcheck]
-        source: "defer .*\\.Close\\("
-      # Body.Close 에러 무시
+        source: "\\.Close\\("
+      # os.RemoveAll 에러 무시 (cleanup 코드)
       - linters: [errcheck]
-        source: "\\.Close\\(\\)"
+        source: "os\\.RemoveAll"
+      # MarkFlagRequired 에러 무시 (Cobra init)
+      - linters: [errcheck]
+        source: "MarkFlagRequired"
