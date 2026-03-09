@@ -761,3 +761,36 @@ func TestClient_DoRaw_Error(t *testing.T) {
 		t.Error("유효하지 않은 호스트에서 에러가 발생해야 합니다")
 	}
 }
+
+// TestNew_WebSocketURLConversion은 WebSocket URL이 HTTP URL로 변환되는지 검증합니다.
+func TestNew_WebSocketURLConversion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		expected string
+	}{
+		{"wss URL 변환", "wss://api.autopus.co/ws/agent", "https://api.autopus.co"},
+		{"ws URL 변환", "ws://localhost:8080/ws/agent", "http://localhost:8080"},
+		{"https URL 유지", "https://api.example.com", "https://api.example.com"},
+		{"http URL 유지", "http://localhost:8080", "http://localhost:8080"},
+		{"후행 슬래시 제거", "https://api.example.com/", "https://api.example.com"},
+		{"wss 후행 슬래시", "wss://api.autopus.co/ws/agent/", "https://api.autopus.co"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			creds := newTestCreds(tt.input)
+			tokenRefresher := auth.NewTokenRefresher(creds)
+			backend := newTestBackendClient(tt.expected, creds)
+			client := apiclient.New(backend, creds, tokenRefresher)
+
+			if got := client.BaseURL(); got != tt.expected {
+				t.Errorf("BaseURL() = %q, want %q", got, tt.expected)
+			}
+		})
+	}
+}

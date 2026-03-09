@@ -34,7 +34,7 @@ type Client struct {
 func New(backend *mcpserver.BackendClient, creds *auth.Credentials, tokenRefresher *auth.TokenRefresher) *Client {
 	baseURL := ""
 	if creds != nil {
-		baseURL = strings.TrimRight(creds.ServerURL, "/")
+		baseURL = wsURLToHTTPBase(creds.ServerURL)
 	}
 	workspaceID := ""
 	if creds != nil {
@@ -245,6 +245,22 @@ func (c *Client) BaseURL() string {
 // WorkspaceID는 현재 워크스페이스 ID를 반환합니다.
 func (c *Client) WorkspaceID() string {
 	return c.workspaceID
+}
+
+// wsURLToHTTPBase는 WebSocket URL을 HTTP 기본 URL로 변환합니다.
+// 예: "wss://api.autopus.co/ws/agent" → "https://api.autopus.co"
+func wsURLToHTTPBase(wsURL string) string {
+	httpURL := strings.TrimRight(wsURL, "/")
+	if strings.HasPrefix(httpURL, "wss://") {
+		httpURL = "https://" + strings.TrimPrefix(httpURL, "wss://")
+	} else if strings.HasPrefix(httpURL, "ws://") {
+		httpURL = "http://" + strings.TrimPrefix(httpURL, "ws://")
+	}
+	// /ws/agent 등 WebSocket 경로 제거
+	if idx := strings.Index(httpURL, "/ws"); idx != -1 {
+		httpURL = httpURL[:idx]
+	}
+	return httpURL
 }
 
 // Token은 현재 유효한 인증 토큰을 반환합니다. SSE 연결 시 사용합니다.
