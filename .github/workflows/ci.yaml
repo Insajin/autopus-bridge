@@ -28,6 +28,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          only-new-issues: true
 
       - name: Vet
         run: go vet ./...
