@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.1] - 2026-03-09
+
+### Fixed
+
+- CI 파이프라인 golangci-lint Go 1.25 호환성 수정
+  - `golangci-lint-action` v6 → v7 업그레이드 (`install-mode: goinstall` 소스 빌드)
+  - golangci-lint v1 → v2.1.6 업그레이드
+  - `.golangci.yml` v2 설정 파일 추가 (errcheck/staticcheck 제외 규칙)
+  - `only-new-issues: true` 설정으로 기존 코드 린트 경고 허용
+
 ## [1.15.0] - 2026-03-09
 
 ### Added
@@ -249,6 +259,7 @@ Previously located at `github.com/anthropics/acos/cmd/local-agent-bridge`.
 - Protocol types extracted to separate SDK: `github.com/insajin/autopus-agent-protocol`
 - See [docs/MIGRATION.md](docs/MIGRATION.md) for upgrade instructions
 
+[1.15.1]: https://github.com/insajin/autopus-bridge/releases/tag/v1.15.1
 [1.15.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.15.0
 [1.14.1]: https://github.com/insajin/autopus-bridge/releases/tag/v1.14.1
 [1.14.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.14.0
