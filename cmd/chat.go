@@ -20,6 +20,7 @@ type DMChannel struct {
 	AgentID     string `json:"agent_id,omitempty"`
 	ChannelType string `json:"channel_type,omitempty"`
 	Name        string `json:"name,omitempty"`
+	Type        string `json:"type,omitempty"`
 }
 
 // ChatMessage는 채팅 메시지를 나타냅니다.
