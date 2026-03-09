@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.15.0] - 2026-03-09
+
+### Added
+
+- SPEC-CLI-001: CLI Phase 1 MVP — workspace/agent/chat/execution/api 서브커맨드
+  - `internal/apiclient` 제네릭 API 클라이언트 (`Do[T]`, `DoList[T]`, `DoPage[T]`)
+  - 테이블/JSON/상세 출력 추상화 (`PrintTable`, `PrintJSON`, `PrintDetail`)
+  - 5개 리소스 관리 명령어 (workspace, agent, chat, execution, api)
+- SPEC-CLI-002: CLI Phase 2 — channel/message/project/issue 리소스 관리 명령어
+  - `channel` 명령어: list/show/create/delete/members/config (DM 채널 분기 포함)
+  - `message` 명령어: list/send/thread/agent-messages (커서 기반 페이지네이션)
+  - `project` 명령어: list/show/create (prefix 옵션)
+  - `issue` 명령어: list/show/create/update/assign + comment list/add (2단계 중첩)
+  - 모든 서브커맨드 `--json` 플래그 지원
+
+### Fixed
+
+- `issue.go` API 경로에 `/api/v1/` 접두사 추가 (런타임 404 방지)
+- `truncateContent()` 바이트 기반 → rune 기반 절단으로 한국어 텍스트 깨짐 수정
+- `chat.go` DMChannel 구조체에 Type 필드 추가
+
 ## [1.14.1] - 2026-03-06
 
 ### Fixed
@@ -228,6 +249,7 @@ Previously located at `github.com/anthropics/acos/cmd/local-agent-bridge`.
 - Protocol types extracted to separate SDK: `github.com/insajin/autopus-agent-protocol`
 - See [docs/MIGRATION.md](docs/MIGRATION.md) for upgrade instructions
 
+[1.15.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.15.0
 [1.14.1]: https://github.com/insajin/autopus-bridge/releases/tag/v1.14.1
 [1.14.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.14.0
 [1.13.0]: https://github.com/insajin/autopus-bridge/releases/tag/v1.13.0
