@@ -1,0 +1,23 @@
+version: "2"
+
+linters:
+  default: standard
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+    rules:
+      # fmt.Fprint*/fmt.Fprintf 등 stdout/stderr 출력 에러 무시
+      - linters: [errcheck]
+        source: "fmt\\.Fprint"
+      # 테스트 파일의 os.Chmod, Body.Close 등 에러 무시
+      - linters: [errcheck]
+        path: "_test\\.go$"
+      # defer에서 Close 에러 무시
+      - linters: [errcheck]
+        source: "defer .*\\.Close\\("
+      # Body.Close 에러 무시
+      - linters: [errcheck]
+        source: "\\.Close\\(\\)"
