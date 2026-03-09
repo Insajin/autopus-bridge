@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.16.0] - 2026-03-10
+
+### Added
+
+- SPEC-CLI-003: CLI Phase 3 — Knowledge Hub, 모니터링, 디버그 + Phase 2 보강
+  - `knowledge` 명령어: list/show/search/create/update/delete/upload/stats (지식 허브 CRUD)
+  - `knowledge folder` 명령어: list/show/create/sync/files/browse/delete (폴더 관리)
+  - `logs` 명령어: SSE 실시간 이벤트 스트리밍 (에이전트/타입 필터, tail)
+  - `metrics` 명령어: 대시보드 메트릭 조회
+  - `health` 명령어: 조직 건강 상태 조회
+  - `debug ping` 명령어: API 응답 시간 측정
+  - `debug ws` 명령어: WebSocket 연결 확인
+  - `debug token` 명령어: JWT 토큰 정보 표시 (만료 경고 포함)
+  - `DoUpload()` multipart/form-data 파일 업로드 (10MB 제한, 확장자 검증)
+  - `ValidateID()` 경로 순회 방어 (`^[a-zA-Z0-9_-]+$` 패턴 검증)
+  - `NewContextWithTimeout()` 표준 API 타임아웃 패턴 (기본 10초)
+
+### Fixed
+
+- Phase 2 보강: issue/channel/message/project 명령어에 ID 검증 + 컨텍스트 타임아웃 적용
+- `truncateContent()` rune 기반 절단으로 멀티바이트 문자 깨짐 방지 (이전 릴리스 수정 보완)
+
 ## [1.15.1] - 2026-03-09
 
 ### Fixed

@@ -56,6 +56,12 @@ Once connected, the bridge receives task requests from the Autopus platform and 
 | `update` | Check for and install the latest version from GitHub Releases |
 | `version` | Print version, commit hash, build date, and Go/OS information |
 | `config` | View and modify configuration settings (`config get`, `config set`, `config list`) |
+| `knowledge` | Manage Knowledge Hub entries (list, show, search, create, update, delete, upload, stats) |
+| `knowledge folder` | Manage Knowledge Hub folders (list, show, create, sync, files, browse, delete) |
+| `logs` | Stream real-time SSE events from the workspace (supports agent and event type filtering) |
+| `metrics` | Display workspace dashboard metrics |
+| `health` | Display organization health status |
+| `debug` | Debug utilities: `ping` (API latency), `ws` (WebSocket test), `token` (JWT info) |
 
 ## Configuration
 
