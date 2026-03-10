@@ -348,6 +348,7 @@ func (p *ClaudeCLIProvider) ExecuteStreaming(ctx context.Context, req ExecuteReq
 	var resultLine *StreamLine
 
 	// 타임아웃 기반 플러시를 위한 goroutine
+	flushCtx, flushCancel := context.WithCancel(execCtx)
 	flushDone := make(chan struct{})
 	go func() {
 		defer close(flushDone)
@@ -355,9 +356,7 @@ func (p *ClaudeCLIProvider) ExecuteStreaming(ctx context.Context, req ExecuteReq
 		defer ticker.Stop()
 		for {
 			select {
-			case <-execCtx.Done():
-				return
-			case <-flushDone:
+			case <-flushCtx.Done():
 				return
 			case <-ticker.C:
 				if accumulator.ShouldFlush() {
@@ -400,11 +399,9 @@ func (p *ClaudeCLIProvider) ExecuteStreaming(ctx context.Context, req ExecuteReq
 		}
 	}
 
-	// 플러시 goroutine 종료 신호 (채널이 이미 닫혔을 수 있으므로 recover)
-	func() {
-		defer func() { _ = recover() }()
-		flushDone <- struct{}{}
-	}()
+	// 플러시 goroutine 종료 및 완료 대기
+	flushCancel()
+	<-flushDone
 
 	// 남은 버퍼 플러시
 	if accumulator.HasPending() {
