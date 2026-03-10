@@ -1,5 +1,5 @@
 // agent.go는 에이전트 관련 CLI 명령어를 구현합니다.
-// AC13-AC17: agent list/show/activity/performance 서브커맨드
+// agent list/show/activity/performance/create/update/delete/toggle/provider/set-provider 서브커맨드
 package cmd
 
 import (
@@ -37,8 +37,29 @@ type AgentDetail struct {
 	CreatedAt   string `json:"created_at,omitempty"`
 }
 
+// AgentProviderConfig는 에이전트 프로바이더 설정을 나타냅니다.
+// GET/PUT /api/v1/agents/:agentId/provider 응답에서 사용합니다.
+type AgentProviderConfig struct {
+	AgentID  string `json:"agent_id,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+}
+
 var (
-	agentJSONOutput bool
+	agentJSONOutput    bool
+	agentCreateName    string
+	agentCreateType    string
+	agentCreateTier    string
+	agentCreatePersona string
+	agentCreateModel   string
+	agentCreateProvider string
+	agentUpdateName    string
+	agentUpdatePersona string
+	agentUpdateModel   string
+	agentUpdateProvider string
+	agentUpdateStatus  string
+	agentSetProvider   string
+	agentSetModel      string
 )
 
 // agentCmd는 agent 서브커맨드의 루트입니다.
@@ -111,17 +132,138 @@ var agentPerformanceCmd = &cobra.Command{
 	},
 }
 
+// agentCreateCmd는 새 에이전트를 생성합니다.
+var agentCreateCmd = &cobra.Command{
+	Use:   "create",
+	Short: "에이전트 생성",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newAPIClient()
+		if err != nil {
+			return err
+		}
+		json, _ := cmd.Flags().GetBool("json")
+		client.SetJSONOutput(json)
+		return runAgentCreate(client, os.Stdout, agentCreateName, agentCreateType, agentCreateTier, agentCreatePersona, agentCreateModel, agentCreateProvider, json)
+	},
+}
+
+// agentUpdateCmd는 에이전트 정보를 수정합니다.
+var agentUpdateCmd = &cobra.Command{
+	Use:   "update <agent-id>",
+	Short: "에이전트 수정",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newAPIClient()
+		if err != nil {
+			return err
+		}
+		json, _ := cmd.Flags().GetBool("json")
+		client.SetJSONOutput(json)
+		return runAgentUpdate(client, os.Stdout, args[0], agentUpdateName, agentUpdatePersona, agentUpdateModel, agentUpdateProvider, agentUpdateStatus, json)
+	},
+}
+
+// agentDeleteCmd는 에이전트를 삭제합니다.
+var agentDeleteCmd = &cobra.Command{
+	Use:   "delete <agent-id>",
+	Short: "에이전트 삭제",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newAPIClient()
+		if err != nil {
+			return err
+		}
+		return runAgentDelete(client, os.Stdout, args[0])
+	},
+}
+
+// agentToggleCmd는 에이전트의 활성/비활성 상태를 전환합니다.
+var agentToggleCmd = &cobra.Command{
+	Use:   "toggle <agent-id>",
+	Short: "에이전트 활성/비활성 전환",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newAPIClient()
+		if err != nil {
+			return err
+		}
+		json, _ := cmd.Flags().GetBool("json")
+		client.SetJSONOutput(json)
+		return runAgentToggle(client, os.Stdout, args[0], json)
+	},
+}
+
+// agentProviderCmd는 에이전트 프로바이더 설정을 조회합니다.
+var agentProviderCmd = &cobra.Command{
+	Use:   "provider <agent-id>",
+	Short: "에이전트 프로바이더 조회",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newAPIClient()
+		if err != nil {
+			return err
+		}
+		json, _ := cmd.Flags().GetBool("json")
+		client.SetJSONOutput(json)
+		return runAgentProvider(client, os.Stdout, args[0], json)
+	},
+}
+
+// agentSetProviderCmd는 에이전트 프로바이더를 설정합니다.
+var agentSetProviderCmd = &cobra.Command{
+	Use:   "set-provider <agent-id>",
+	Short: "에이전트 프로바이더 설정",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		client, err := newAPIClient()
+		if err != nil {
+			return err
+		}
+		json, _ := cmd.Flags().GetBool("json")
+		client.SetJSONOutput(json)
+		return runAgentSetProvider(client, os.Stdout, args[0], agentSetProvider, agentSetModel, json)
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(agentCmd)
 	agentCmd.AddCommand(agentListCmd)
 	agentCmd.AddCommand(agentShowCmd)
 	agentCmd.AddCommand(agentActivityCmd)
 	agentCmd.AddCommand(agentPerformanceCmd)
+	agentCmd.AddCommand(agentCreateCmd)
+	agentCmd.AddCommand(agentUpdateCmd)
+	agentCmd.AddCommand(agentDeleteCmd)
+	agentCmd.AddCommand(agentToggleCmd)
+	agentCmd.AddCommand(agentProviderCmd)
+	agentCmd.AddCommand(agentSetProviderCmd)
 
-	// --json 플래그를 모든 서브커맨드에 추가
-	for _, sub := range []*cobra.Command{agentListCmd, agentShowCmd, agentActivityCmd, agentPerformanceCmd} {
+	// --json 플래그를 서브커맨드에 추가
+	for _, sub := range []*cobra.Command{agentListCmd, agentShowCmd, agentActivityCmd, agentPerformanceCmd, agentCreateCmd, agentUpdateCmd, agentToggleCmd, agentProviderCmd, agentSetProviderCmd} {
 		sub.Flags().BoolVar(&agentJSONOutput, "json", false, "JSON 형식으로 출력")
 	}
+
+	// agent create 전용 플래그
+	agentCreateCmd.Flags().StringVar(&agentCreateName, "name", "", "에이전트 이름 (필수)")
+	agentCreateCmd.Flags().StringVar(&agentCreateType, "type", "", "에이전트 유형")
+	agentCreateCmd.Flags().StringVar(&agentCreateTier, "tier", "", "에이전트 티어")
+	agentCreateCmd.Flags().StringVar(&agentCreatePersona, "persona", "", "에이전트 페르소나")
+	agentCreateCmd.Flags().StringVar(&agentCreateModel, "model", "", "AI 모델")
+	agentCreateCmd.Flags().StringVar(&agentCreateProvider, "provider", "", "AI 프로바이더")
+	agentCreateCmd.MarkFlagRequired("name")
+
+	// agent update 전용 플래그
+	agentUpdateCmd.Flags().StringVar(&agentUpdateName, "name", "", "에이전트 이름")
+	agentUpdateCmd.Flags().StringVar(&agentUpdatePersona, "persona", "", "에이전트 페르소나")
+	agentUpdateCmd.Flags().StringVar(&agentUpdateModel, "model", "", "AI 모델")
+	agentUpdateCmd.Flags().StringVar(&agentUpdateProvider, "provider", "", "AI 프로바이더")
+	agentUpdateCmd.Flags().StringVar(&agentUpdateStatus, "status", "", "에이전트 상태")
+
+	// agent set-provider 전용 플래그
+	agentSetProviderCmd.Flags().StringVar(&agentSetProvider, "provider", "", "AI 프로바이더 (필수)")
+	agentSetProviderCmd.Flags().StringVar(&agentSetModel, "model", "", "AI 모델 (필수)")
+	agentSetProviderCmd.MarkFlagRequired("provider")
+	agentSetProviderCmd.MarkFlagRequired("model")
 }
 
 // runAgentList는 대시보드 에이전트 목록을 출력합니다.

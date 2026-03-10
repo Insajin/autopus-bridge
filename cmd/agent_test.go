@@ -146,6 +146,226 @@ func TestFindDashboardAgentByName(t *testing.T) {
 	}
 }
 
+func TestRunAgentCreate(t *testing.T) {
+	agentDetail := AgentDetail{
+		ID:       "ag-new",
+		Name:     "New Agent",
+		Status:   "active",
+		Model:    "gpt-4",
+		Provider: "openai",
+	}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1/agents" || r.Method != http.MethodPost {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		payload, _ := json.Marshal(agentDetail)
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+		}
+		b, _ := json.Marshal(resp)
+		w.Write(b)
+	}))
+	defer srv.Close()
+
+	client := makeAgentTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAgentCreate(client, &buf, "New Agent", "", "", "", "gpt-4", "openai", false)
+	if err != nil {
+		t.Fatalf("runAgentCreate 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "New Agent") {
+		t.Errorf("출력에 'New Agent'가 없습니다: %s", out)
+	}
+	if capturedBody["name"] != "New Agent" {
+		t.Errorf("요청 본문 name = %v, want 'New Agent'", capturedBody["name"])
+	}
+}
+
+func TestRunAgentUpdate(t *testing.T) {
+	agentDetail := AgentDetail{ID: "ag-1", Name: "Updated Agent"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/ag-1" || r.Method != http.MethodPatch {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		payload, _ := json.Marshal(agentDetail)
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+		}
+		b, _ := json.Marshal(resp)
+		w.Write(b)
+	}))
+	defer srv.Close()
+
+	client := makeAgentTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAgentUpdate(client, &buf, "ag-1", "Updated Agent", "", "", "", "", false)
+	if err != nil {
+		t.Fatalf("runAgentUpdate 오류: %v", err)
+	}
+
+	if capturedBody["name"] != "Updated Agent" {
+		t.Errorf("요청 본문 name = %v, want 'Updated Agent'", capturedBody["name"])
+	}
+}
+
+func TestRunAgentDelete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/ag-1" || r.Method != http.MethodDelete {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		payload, _ := json.Marshal(map[string]interface{}{})
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+		}
+		b, _ := json.Marshal(resp)
+		w.Write(b)
+	}))
+	defer srv.Close()
+
+	client := makeAgentTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAgentDelete(client, &buf, "ag-1")
+	if err != nil {
+		t.Fatalf("runAgentDelete 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "에이전트 삭제 완료") {
+		t.Errorf("출력에 '에이전트 삭제 완료'가 없습니다: %s", out)
+	}
+}
+
+func TestRunAgentToggle(t *testing.T) {
+	agentDetail := AgentDetail{ID: "ag-1", Name: "CTO", Status: "inactive"}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/ag-1/toggle" || r.Method != http.MethodPatch {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		payload, _ := json.Marshal(agentDetail)
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+		}
+		b, _ := json.Marshal(resp)
+		w.Write(b)
+	}))
+	defer srv.Close()
+
+	client := makeAgentTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAgentToggle(client, &buf, "ag-1", false)
+	if err != nil {
+		t.Fatalf("runAgentToggle 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "CTO") {
+		t.Errorf("출력에 'CTO'가 없습니다: %s", out)
+	}
+}
+
+func TestRunAgentProvider(t *testing.T) {
+	providerCfg := AgentProviderConfig{
+		AgentID:  "ag-1",
+		Provider: "openai",
+		Model:    "gpt-4",
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/ag-1/provider" || r.Method != http.MethodGet {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		payload, _ := json.Marshal(providerCfg)
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+		}
+		b, _ := json.Marshal(resp)
+		w.Write(b)
+	}))
+	defer srv.Close()
+
+	client := makeAgentTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAgentProvider(client, &buf, "ag-1", false)
+	if err != nil {
+		t.Fatalf("runAgentProvider 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "openai") {
+		t.Errorf("출력에 'openai'가 없습니다: %s", out)
+	}
+}
+
+func TestRunAgentSetProvider(t *testing.T) {
+	providerCfg := AgentProviderConfig{
+		AgentID:  "ag-1",
+		Provider: "anthropic",
+		Model:    "claude-3",
+	}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/agents/ag-1/provider" || r.Method != http.MethodPut {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		payload, _ := json.Marshal(providerCfg)
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+		}
+		b, _ := json.Marshal(resp)
+		w.Write(b)
+	}))
+	defer srv.Close()
+
+	client := makeAgentTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAgentSetProvider(client, &buf, "ag-1", "anthropic", "claude-3", false)
+	if err != nil {
+		t.Fatalf("runAgentSetProvider 오류: %v", err)
+	}
+
+	if capturedBody["provider"] != "anthropic" {
+		t.Errorf("요청 본문 provider = %v, want 'anthropic'", capturedBody["provider"])
+	}
+	if capturedBody["model"] != "claude-3" {
+		t.Errorf("요청 본문 model = %v, want 'claude-3'", capturedBody["model"])
+	}
+}
+
 func TestRunAgentActivity(t *testing.T) {
 	dashboardAgents := []DashboardAgent{
 		{ID: "ag-1", Name: "CTO"},

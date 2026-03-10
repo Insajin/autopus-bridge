@@ -240,6 +240,111 @@ func TestRunProjectShow_InvalidProjectID(t *testing.T) {
 	}
 }
 
+func TestRunProjectUpdate(t *testing.T) {
+	proj := Project{ID: "proj-1111-2222", Name: "Updated Project"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/projects/proj-1111-2222" || r.Method != http.MethodPatch {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(proj))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runProjectUpdate(client, &buf, "proj-1111-2222", "Updated Project", false)
+	if err != nil {
+		t.Fatalf("runProjectUpdate 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Updated Project") {
+		t.Errorf("출력에 'Updated Project'가 없습니다: %s", out)
+	}
+	if capturedBody["name"] != "Updated Project" {
+		t.Errorf("요청 본문 name = %v, want 'Updated Project'", capturedBody["name"])
+	}
+}
+
+func TestRunProjectDelete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/projects/proj-1111-2222" || r.Method != http.MethodDelete {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(map[string]interface{}{}))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runProjectDelete(client, &buf, "proj-1111-2222")
+	if err != nil {
+		t.Fatalf("runProjectDelete 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "프로젝트 삭제 완료") {
+		t.Errorf("출력에 '프로젝트 삭제 완료'가 없습니다: %s", out)
+	}
+}
+
+func TestRunProjectAddMember(t *testing.T) {
+	member := WorkspaceMember{ID: "u-new", Name: "Charlie", Email: "charlie@example.com", Role: "member"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/projects/proj-1111-2222/members" || r.Method != http.MethodPost {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(member))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runProjectAddMember(client, &buf, "proj-1111-2222", "u-new")
+	if err != nil {
+		t.Fatalf("runProjectAddMember 오류: %v", err)
+	}
+
+	if capturedBody["user_id"] != "u-new" {
+		t.Errorf("요청 본문 user_id = %v, want 'u-new'", capturedBody["user_id"])
+	}
+}
+
+func TestRunProjectRemoveMember(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/projects/proj-1111-2222/members/u-1" || r.Method != http.MethodDelete {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(map[string]interface{}{}))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runProjectRemoveMember(client, &buf, "proj-1111-2222", "u-1")
+	if err != nil {
+		t.Fatalf("runProjectRemoveMember 오류: %v", err)
+	}
+}
+
 func TestRunProjectCreateWithPrefix(t *testing.T) {
 	proj := Project{
 		ID:     "proj-new-5678",

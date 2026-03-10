@@ -187,6 +187,205 @@ func TestRunWorkspaceMembers(t *testing.T) {
 	}
 }
 
+func TestRunWorkspaceCreate(t *testing.T) {
+	ws := Workspace{ID: "ws-new", Name: "New Workspace", Slug: "new-workspace"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces" || r.Method != http.MethodPost {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(makeAPIResponse(ws))
+	}))
+	defer srv.Close()
+
+	client := makeWorkspaceTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runWorkspaceCreate(client, &buf, "New Workspace", false)
+	if err != nil {
+		t.Fatalf("runWorkspaceCreate 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "New Workspace") {
+		t.Errorf("출력에 'New Workspace'가 없습니다: %s", out)
+	}
+	if capturedBody["name"] != "New Workspace" {
+		t.Errorf("요청 본문 name = %v, want 'New Workspace'", capturedBody["name"])
+	}
+}
+
+func TestRunWorkspaceUpdate(t *testing.T) {
+	ws := Workspace{ID: "ws-1", Name: "Updated WS", Slug: "ws-1"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1" || r.Method != http.MethodPatch {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(makeAPIResponse(ws))
+	}))
+	defer srv.Close()
+
+	client := makeWorkspaceTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runWorkspaceUpdate(client, &buf, "Updated WS", "", false)
+	if err != nil {
+		t.Fatalf("runWorkspaceUpdate 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Updated WS") {
+		t.Errorf("출력에 'Updated WS'가 없습니다: %s", out)
+	}
+	if capturedBody["name"] != "Updated WS" {
+		t.Errorf("요청 본문 name = %v, want 'Updated WS'", capturedBody["name"])
+	}
+}
+
+func TestRunWorkspaceDelete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1" || r.Method != http.MethodDelete {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(makeAPIResponse(map[string]interface{}{}))
+	}))
+	defer srv.Close()
+
+	client := makeWorkspaceTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runWorkspaceDelete(client, &buf)
+	if err != nil {
+		t.Fatalf("runWorkspaceDelete 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "워크스페이스 삭제 완료") {
+		t.Errorf("출력에 '워크스페이스 삭제 완료'가 없습니다: %s", out)
+	}
+}
+
+func TestRunWorkspaceMission(t *testing.T) {
+	ws := Workspace{ID: "ws-1", Name: "Alpha", Slug: "alpha"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1/mission" || r.Method != http.MethodPatch {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(makeAPIResponse(ws))
+	}))
+	defer srv.Close()
+
+	client := makeWorkspaceTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runWorkspaceMission(client, &buf, "우리의 미션", "우리의 비전", false)
+	if err != nil {
+		t.Fatalf("runWorkspaceMission 오류: %v", err)
+	}
+
+	if capturedBody["mission"] != "우리의 미션" {
+		t.Errorf("요청 본문 mission = %v, want '우리의 미션'", capturedBody["mission"])
+	}
+	if capturedBody["vision"] != "우리의 비전" {
+		t.Errorf("요청 본문 vision = %v, want '우리의 비전'", capturedBody["vision"])
+	}
+}
+
+func TestRunWorkspaceAddMember(t *testing.T) {
+	member := WorkspaceMember{ID: "u-new", Name: "Charlie", Email: "charlie@example.com", Role: "member"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1/members" || r.Method != http.MethodPost {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(makeAPIResponse(member))
+	}))
+	defer srv.Close()
+
+	client := makeWorkspaceTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runWorkspaceAddMember(client, &buf, "u-new", "member")
+	if err != nil {
+		t.Fatalf("runWorkspaceAddMember 오류: %v", err)
+	}
+
+	if capturedBody["user_id"] != "u-new" {
+		t.Errorf("요청 본문 user_id = %v, want 'u-new'", capturedBody["user_id"])
+	}
+	if capturedBody["role"] != "member" {
+		t.Errorf("요청 본문 role = %v, want 'member'", capturedBody["role"])
+	}
+}
+
+func TestRunWorkspaceRemoveMember(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1/members/u-1" || r.Method != http.MethodDelete {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(makeAPIResponse(map[string]interface{}{}))
+	}))
+	defer srv.Close()
+
+	client := makeWorkspaceTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runWorkspaceRemoveMember(client, &buf, "u-1")
+	if err != nil {
+		t.Fatalf("runWorkspaceRemoveMember 오류: %v", err)
+	}
+}
+
+func TestRunWorkspaceUpdateRole(t *testing.T) {
+	member := WorkspaceMember{ID: "u-1", Name: "Alice", Email: "alice@example.com", Role: "admin"}
+
+	var capturedBody map[string]interface{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1/members/u-1" || r.Method != http.MethodPatch {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		json.NewDecoder(r.Body).Decode(&capturedBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(makeAPIResponse(member))
+	}))
+	defer srv.Close()
+
+	client := makeWorkspaceTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runWorkspaceUpdateRole(client, &buf, "u-1", "admin")
+	if err != nil {
+		t.Fatalf("runWorkspaceUpdateRole 오류: %v", err)
+	}
+
+	if capturedBody["role"] != "admin" {
+		t.Errorf("요청 본문 role = %v, want 'admin'", capturedBody["role"])
+	}
+}
+
 func TestRunWorkspaceSwitch(t *testing.T) {
 	workspaces := []Workspace{
 		{ID: "ws-1", Name: "Alpha", Slug: "alpha"},

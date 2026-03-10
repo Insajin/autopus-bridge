@@ -62,6 +62,26 @@ Once connected, the bridge receives task requests from the Autopus platform and 
 | `metrics` | Display workspace dashboard metrics |
 | `health` | Display organization health status |
 | `debug` | Debug utilities: `ping` (API latency), `ws` (WebSocket test), `token` (JWT info) |
+| `sprint` | Manage project sprints (list, show, create, update, delete, start, complete, add/remove issues) |
+| `task` | Manage agent task queue (list, show, create, assign, start, complete, fail, cancel, stats) |
+| `automation` | Manage automation workflows (list, show, create, update, delete, toggle, add-action) |
+| `schedule` | Manage schedules (list, show, create, update, delete, toggle, logs) |
+| `decision` | Manage decisions and consensus (list, show, create, resolve, escalate, vote, confidence) |
+| `approval` | Manage approvals (list, show, approve, reject) |
+| `approval-chain` | Manage approval chains (templates, create-template, list, start, show, approve, reject) |
+| `rule` | Manage trigger rules (list, show, create, update, delete, toggle, logs) |
+| `skill` | Manage skill registry (list, show, sync, quality, versions, assign, recommend, auto-assign) |
+| `template` | Browse and deploy agent templates (list, show, domains, categories, deploy) |
+| `meeting` | Manage meetings (list, show, create, start, end, cancel, messages, schedule) |
+| `report` | Manage scheduled reports (list, show, create, update, delete, trigger, toggle) |
+| `content` | Manage content calendar (list, show, create, update, delete, schedule, approve) |
+| `planning` | Strategic planning (goals, initiatives, alignment) |
+| `autonomy` | Manage autonomy phases (phase, history, readiness, trends, recommendation) |
+| `anomaly` | Anomaly detection (list, detect, acknowledge, resolve) |
+| `observability` | Observability dashboard (agents, executions, cost, health, trends) |
+| `pipeline` | Manage deployment pipelines (list, show, events, retry, cancel, history) |
+| `label` | Manage project labels (list, create, update, delete, add, remove) |
+| `attachment` | Manage issue attachments (list, upload, show, download, delete) |
 
 ## Configuration
 

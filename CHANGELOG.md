@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.0] - 2026-03-10
+
+### Added
+
+- SPEC-CLI-004: CLI Phase 4 — 자율 에이전트 운영 (23개 도메인, ~159 서브커맨드)
+  - Phase 4A 핵심 운영:
+    - `sprint` 명령어: list/show/create/update/delete/start/complete/add-issue/remove-issue/issues (스프린트 관리)
+    - `task` 명령어: list/show/create/assign/start/complete/fail/cancel/stats (에이전트 태스크 큐)
+    - `automation` 명령어: list/show/create/update/delete/toggle/add-action (자동화 워크플로우)
+    - `schedule` 명령어: list/show/create/update/delete/toggle/logs (스케줄 관리)
+  - Phase 4B 의사결정/거버넌스:
+    - `decision` 명령어: list/show/create/resolve/human-resolve/escalate/audit-log/consensus/consensus-start/vote/confidence (의사결정 + 합의)
+    - `approval` 명령어: list/show/approve/reject (승인 관리)
+    - `approval-chain` 명령어: templates/create-template/list/start/show/approve/reject (승인 체인)
+    - `rule` 명령어: list/show/create/update/delete/toggle/logs (트리거 룰)
+  - Phase 4C 성장/협업:
+    - `skill` 명령어: list/show/sync/quality/versions/rollback/executions/agent-skills/assign/unassign/recommend/auto-assign (스킬 레지스트리)
+    - `template` 명령어: list/show/domains/categories/deploy (에이전트 템플릿)
+    - `meeting` 명령어: list/show/create/start/end/cancel/messages/regenerate-minutes/schedule-create/schedules (미팅 관리)
+    - `report` 명령어: list/show/create/update/delete/trigger/toggle (정기 보고서)
+    - `content` 명령어: list/show/create/update/delete/schedule/approve (콘텐츠 캘린더)
+    - `planning` 명령어: goals/goal-create/initiatives/initiative-create/alignment (전략 기획)
+    - `autonomy` 명령어: phase/phase-update/history/readiness/transition-history/trends/recommendation (자율단계 관리)
+  - Phase 4D 관측/보강:
+    - `anomaly` 명령어: list/detect/acknowledge/resolve (이상 탐지)
+    - `observability` 명령어: agents/agent/executions/cost/health/trends (관측성)
+    - `pipeline` 명령어: list/show/events/retry/cancel/history (배포 파이프라인)
+    - `label` 명령어: list/create/update/delete/add/remove (라벨 관리)
+    - `attachment` 명령어: list/upload/show/download/delete (첨부파일 관리)
+    - `workspace` 쓰기 추가: create/update/delete/mission/add-member/remove-member/update-role
+    - `agent` 쓰기 추가: create/update/delete/toggle/provider/set-provider
+    - `project` 쓰기 추가: update/delete/add-member/remove-member
+
 ## [1.16.0] - 2026-03-10
 
 ### Added
