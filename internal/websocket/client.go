@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,6 +36,10 @@ const (
 	closeCodeReplacedByNewConnection = 4001
 	// closeReasonReplacedByNewConnection is used as close text by the backend.
 	closeReasonReplacedByNewConnection = "replaced_by_new_connection"
+
+	// AgentMsgCapabilityUpdate는 Bridge가 백엔드로 전송하는 capabilities 업데이트 메시지 타입입니다.
+	// SPEC-HOTSWAP-001: 인증 파일 변경 시 연결 끊김 없이 capabilities를 업데이트합니다.
+	AgentMsgCapabilityUpdate = "capability_update"
 )
 
 // isAuthError는 에러 메시지가 인증 관련 에러인지 판단합니다.
@@ -158,6 +163,10 @@ type Client struct {
 	conn *websocket.Conn
 	// connMu는 연결 접근을 보호하는 뮤텍스입니다.
 	connMu sync.RWMutex
+
+	// capMu는 providerCapabilities 접근을 보호하는 뮤텍스입니다.
+	// SPEC-HOTSWAP-001: UpdateProviderCapabilities와 sendConnect의 동시 접근 보호
+	capMu sync.RWMutex
 
 	// state는 현재 연결 상태입니다.
 	state atomic.Int32
@@ -423,10 +432,15 @@ func (c *Client) sendConnect() error {
 	lastExecID := c.lastExecID
 	c.lastExecIDMu.RUnlock()
 
+	// SPEC-HOTSWAP-001: capMu로 보호된 최신 providerCapabilities 읽기
+	c.capMu.RLock()
+	providerCaps := c.providerCapabilities
+	c.capMu.RUnlock()
+
 	payload := ws.AgentConnectPayload{
 		Version:              c.version,
 		Capabilities:         c.capabilities,
-		ProviderCapabilities: c.providerCapabilities,
+		ProviderCapabilities: providerCaps,
 		LastExecID:           lastExecID,
 		Token:                c.token,
 	}
@@ -760,6 +774,43 @@ func (c *Client) UpdateToken(token string) {
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
 	c.token = token
+}
+
+// UpdateProviderCapabilities는 프로바이더 capabilities를 업데이트하고,
+// 연결된 상태이면 백엔드로 capability_update 메시지를 전송합니다.
+// SPEC-HOTSWAP-001: 인증 파일 변경 시 연결 끊김 없이 hot-swap 지원
+//
+// REQ-S-001: 오프라인 상태이면 로컬에만 저장 (재연결 시 sendConnect에서 최신 값 전송)
+// REQ-S-002: 이전과 동일한 capabilities면 전송하지 않음
+// @MX:ANCHOR: [AUTO] SPEC-HOTSWAP-001 - authwatch, connect.go에서 호출
+// @MX:REASON: 외부 공개 API로 authwatch 콜백과 connect.go에서 사용
+func (c *Client) UpdateProviderCapabilities(caps map[string]bool) {
+	// REQ-S-002: 이전 값과 비교하여 변경이 없으면 skip
+	c.capMu.Lock()
+	if maps.Equal(c.providerCapabilities, caps) {
+		c.capMu.Unlock()
+		return
+	}
+	// 복사본 저장
+	newCaps := make(map[string]bool, len(caps))
+	for k, v := range caps {
+		newCaps[k] = v
+	}
+	c.providerCapabilities = newCaps
+	c.capMu.Unlock()
+
+	// REQ-S-001: 연결된 상태에서만 메시지 전송
+	if c.State() != StateConnected {
+		return
+	}
+
+	type capabilityUpdatePayload struct {
+		Capabilities map[string]bool `json:"capabilities"`
+	}
+	payload := capabilityUpdatePayload{Capabilities: newCaps}
+	if err := c.sendMessage(AgentMsgCapabilityUpdate, payload); err != nil {
+		log.Printf("[HOTSWAP] capability_update 전송 실패: %v", err)
+	}
 }
 
 // SetTokenRefreshFunc은 재연결 전 토큰을 갱신하는 콜백을 설정합니다.

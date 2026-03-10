@@ -22,6 +22,7 @@ import (
 	"github.com/insajin/autopus-agent-protocol"
 	embeddedDocker "github.com/insajin/autopus-bridge/docker"
 	"github.com/insajin/autopus-bridge/internal/auth"
+	"github.com/insajin/autopus-bridge/internal/authwatch"
 	"github.com/insajin/autopus-bridge/internal/computeruse"
 	"github.com/insajin/autopus-bridge/internal/config"
 	"github.com/insajin/autopus-bridge/internal/executor"
@@ -253,6 +254,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		websocket.WithProviderCapabilities(providerCaps),
 		websocket.WithReconnectStrategy(reconnectStrategy),
 	)
+
+	// SPEC-HOTSWAP-001: authwatch 시작 - 인증 파일 변경 감지 및 hot-swap 지원
+	authWatcher := startAuthWatcher(ctx, registry, client)
+	if authWatcher != nil {
+		defer authWatcher.Stop()
+	}
 
 	// 인증 실패 콜백 등록: 토큰 만료 시 자동 재인증 시도
 	client.SetOnAuthFailure(func(authErr error) {
@@ -564,6 +571,74 @@ func initializeProviders(ctx context.Context, cfg *config.Config) (*provider.Reg
 
 	return provider.InitializeRegistryWithLogger(ctx, registryConfig, log.Logger)
 }
+
+// startAuthWatcher는 authwatch 인스턴스를 시작합니다.
+// SPEC-HOTSWAP-001: 인증 파일 변경 감지로 연결 끊김 없이 capabilities 업데이트
+//
+// 에러 발생 시 nil을 반환하고 경고를 로깅합니다 (기능 비활성화로 폴백).
+func startAuthWatcher(ctx context.Context, reg *provider.Registry, client *websocket.Client) *authwatch.Watcher {
+	// provider.Registry의 프로바이더를 authwatch.Provider로 래핑
+	providerList := reg.ListProviders()
+	authProviders := make([]authwatch.Provider, 0, len(providerList))
+	for _, p := range providerList {
+		authProviders = append(authProviders, &registryProviderAdapter{p: p})
+	}
+
+	// 각 프로바이더의 표준 인증 디렉토리
+	home, err := os.UserHomeDir()
+	if err != nil {
+		logger.Warn().Err(err).Msg("authwatch: 홈 디렉토리 조회 실패")
+		home = ""
+	}
+
+	var watchDirs []string
+	if home != "" {
+		watchDirs = []string{
+			filepath.Join(home, ".claude"),
+			filepath.Join(home, ".codex"),
+			filepath.Join(home, ".gemini"),
+			filepath.Join(home, ".config", "gcloud"),
+		}
+	}
+
+	w, err := authwatch.New(
+		authProviders,
+		func(caps map[string]bool) {
+			// capabilities 변경을 canonical name으로 변환하여 전송
+			canonicalCaps := make(map[string]bool, len(caps))
+			for name, v := range caps {
+				canonicalCaps[provider.ToCanonicalName(name)] = v
+			}
+			client.UpdateProviderCapabilities(canonicalCaps)
+		},
+		authwatch.WithWatchDirs(watchDirs...),
+	)
+	if err != nil {
+		logger.Warn().Err(err).Msg("authwatch: 감시자 생성 실패, hot-swap 기능 비활성화")
+		return nil
+	}
+
+	if err := w.Start(ctx); err != nil {
+		logger.Warn().Err(err).Msg("authwatch: 감시자 시작 실패, hot-swap 기능 비활성화")
+		return nil
+	}
+
+	logger.Info().Msg("authwatch: 인증 파일 감시 시작 (SPEC-HOTSWAP-001)")
+	return w
+}
+
+// registryProviderAdapter는 provider.Provider를 authwatch.Provider로 래핑합니다.
+// authwatch 패키지가 provider 패키지에 의존하지 않도록 어댑터 패턴을 사용합니다.
+type registryProviderAdapter struct {
+	p provider.Provider
+}
+
+func (a *registryProviderAdapter) Name() string         { return a.p.Name() }
+func (a *registryProviderAdapter) ValidateConfig() error { return a.p.ValidateConfig() }
+
+// AuthFilePath는 빈 문자열을 반환합니다.
+// connect.go에서 WithWatchDirs()로 직접 디렉토리를 지정하므로 이 메서드는 사용되지 않습니다.
+func (a *registryProviderAdapter) AuthFilePath() string { return "" }
 
 // getProviderCLIPath는 프로바이더별 CLI 바이너리 경로를 반환합니다.
 // config.yaml에 cli_path가 명시적으로 설정된 경우 그 값을 사용하고,
