@@ -14,6 +14,16 @@ import (
 
 // ---- 지식 항목(Entry) 관련 테스트 ----
 
+func TestKnowledgeSyncCommand_NotRegistered(t *testing.T) {
+	t.Parallel()
+
+	for _, sub := range knowledgeCmd.Commands() {
+		if sub.Name() == "sync" {
+			t.Fatal("knowledge sync command should not be registered until transport is implemented")
+		}
+	}
+}
+
 // TestRunKnowledgeList는 지식 항목 목록 조회를 검증합니다.
 func TestRunKnowledgeList(t *testing.T) {
 	importance := 5

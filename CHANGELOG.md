@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.17.2] - 2026-03-12
+
+### Fixed
+
+- `execute --wait`가 inline 실행 결과를 받은 경우 상태 polling 없이 즉시 완료 처리하도록 수정
+- 미구현 상태의 `knowledge sync` 초안 커맨드가 사용자에게 노출되지 않도록 정리
+- internal knowledge sync watcher가 하위 디렉토리를 재귀적으로 감시하고 종료 시 events 채널을 정상 종료하도록 보강
+
 ## [1.17.0] - 2026-03-10
 
 ### Added
