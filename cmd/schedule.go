@@ -33,15 +33,15 @@ type ScheduleLog struct {
 }
 
 var (
-	scheduleJSONOutput    bool
-	scheduleName          string
-	scheduleDesc          string
-	scheduleCron          string
-	scheduleTimezone      string
-	scheduleAgentID       string
-	scheduleTaskTemplate  string
-	scheduleLogsLimit     int
-	scheduleLogsOffset    int
+	scheduleJSONOutput   bool
+	scheduleName         string
+	scheduleDesc         string
+	scheduleCron         string
+	scheduleTimezone     string
+	scheduleAgentID      string
+	scheduleTaskTemplate string
+	scheduleLogsLimit    int
+	scheduleLogsOffset   int
 )
 
 // scheduleCmd는 schedule 서브커맨드의 루트입니다.
@@ -228,13 +228,8 @@ func runScheduleList(client *apiclient.Client, out io.Writer, jsonOutput bool) e
 	headers := []string{"ID", "NAME", "CRON", "TIMEZONE", "ACTIVE"}
 	rows := make([][]string, len(schedules))
 	for i, s := range schedules {
-		// ID는 첫 8자만 표시
-		shortID := s.ID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
 		rows[i] = []string{
-			shortID,
+			s.ID,
 			s.Name,
 			s.CronExpression,
 			s.Timezone,
@@ -444,13 +439,8 @@ func runScheduleLogs(client *apiclient.Client, out io.Writer, scheduleID string,
 	headers := []string{"ID", "STATUS", "STARTED", "FINISHED"}
 	rows := make([][]string, len(logs))
 	for i, l := range logs {
-		// ID는 첫 8자만 표시
-		shortID := l.ID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
 		rows[i] = []string{
-			shortID,
+			l.ID,
 			l.Status,
 			l.StartedAt,
 			l.FinishedAt,

@@ -153,6 +153,34 @@ func TestRunAutonomyHistoryJSON(t *testing.T) {
 	}
 }
 
+func TestRunAutonomyHistoryWrappedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(map[string]interface{}{
+			"logs": []map[string]interface{}{
+				{
+					"id":         "550e8400-e29b-41d4-a716-446655440000",
+					"new_phase":  "P2",
+					"created_at": "2026-03-11T00:00:00Z",
+				},
+			},
+		}))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAutonomyHistory(client, &buf, false)
+	if err != nil {
+		t.Fatalf("runAutonomyHistory wrapped 오류: %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "P2") {
+		t.Errorf("출력에 'P2'가 없습니다: %s", buf.String())
+	}
+}
+
 func TestRunAutonomyReadiness(t *testing.T) {
 	readiness := AutonomyReadiness{CurrentPhase: "semi-autonomous", NextPhase: "autonomous", ReadyScore: 0.75}
 
@@ -322,6 +350,35 @@ func TestRunAutonomyRecommendationJSON(t *testing.T) {
 	}
 	if parsed.RecommendedPhase != "autonomous" {
 		t.Errorf("예상치 않은 recommended_phase: %s", parsed.RecommendedPhase)
+	}
+}
+
+func TestRunAutonomyRecommendationEnvelope(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(map[string]interface{}{
+			"recommendation": map[string]interface{}{
+				"type":            "upgrade",
+				"current_phase":   "P1",
+				"target_phase":    "P2",
+				"readiness_score": 100.0,
+				"reason":          "ready",
+			},
+		}))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runAutonomyRecommendation(client, &buf, false)
+	if err != nil {
+		t.Fatalf("runAutonomyRecommendation envelope 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "P2") {
+		t.Errorf("출력에 'P2'가 없습니다: %s", out)
 	}
 }
 

@@ -149,7 +149,7 @@ func (c *Client) do(ctx context.Context, method, path string, body interface{}) 
 	}
 
 	if resp.StatusCode >= 400 {
-		errMsg := apiResp.Error
+		errMsg := apiResp.Error.String()
 		if errMsg == "" {
 			errMsg = apiResp.Message
 		}

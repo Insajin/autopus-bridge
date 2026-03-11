@@ -28,23 +28,74 @@ type AutonomyHistory struct {
 
 // AutonomyReadiness는 자율성 전환 준비 상태를 나타냅니다.
 type AutonomyReadiness struct {
-	CurrentPhase string  `json:"current_phase"`
-	NextPhase    string  `json:"next_phase,omitempty"`
-	ReadyScore   float64 `json:"ready_score"`
-	Blockers     string  `json:"blockers,omitempty"`
+	CurrentPhase    string              `json:"current_phase"`
+	TargetPhase     string              `json:"target_phase,omitempty"`
+	NextPhase       string              `json:"next_phase,omitempty"`
+	Score           float64             `json:"score,omitempty"`
+	ReadyScore      float64             `json:"ready_score,omitempty"`
+	Conditions      []AutonomyCondition `json:"conditions,omitempty"`
+	ConsecutiveDays int                 `json:"consecutive_days,omitempty"`
+	IsEligible      bool                `json:"is_eligible,omitempty"`
+	Blockers        string              `json:"blockers,omitempty"`
 }
 
 // AutonomyTrend는 자율성 점수 추이를 나타냅니다.
 type AutonomyTrend struct {
-	Period string  `json:"period"`
-	Score  float64 `json:"score"`
+	Period         string  `json:"period,omitempty"`
+	CurrentPhase   string  `json:"current_phase,omitempty"`
+	TargetPhase    string  `json:"target_phase,omitempty"`
+	SnapshotAt     string  `json:"snapshot_at,omitempty"`
+	Score          float64 `json:"score,omitempty"`
+	ReadinessScore float64 `json:"readiness_score,omitempty"`
 }
 
 // AutonomyRecommendation은 자율성 전환 추천 정보를 나타냅니다.
 type AutonomyRecommendation struct {
 	RecommendedPhase string  `json:"recommended_phase"`
+	Type             string  `json:"type,omitempty"`
+	CurrentPhase     string  `json:"current_phase,omitempty"`
+	TargetPhase      string  `json:"target_phase,omitempty"`
+	ReadinessScore   float64 `json:"readiness_score,omitempty"`
 	Confidence       float64 `json:"confidence"`
 	Rationale        string  `json:"rationale,omitempty"`
+	Reason           string  `json:"reason,omitempty"`
+	ConsecutiveDays  int     `json:"consecutive_days,omitempty"`
+}
+
+// AutonomyCondition은 준비도/권고 응답의 개별 조건을 나타냅니다.
+type AutonomyCondition struct {
+	Name      string  `json:"name"`
+	Threshold float64 `json:"threshold"`
+	Current   float64 `json:"current"`
+	Weight    float64 `json:"weight"`
+	Met       bool    `json:"met"`
+}
+
+type autonomyPhaseHistoryResponse struct {
+	Logs []autonomyPhaseHistoryItem `json:"logs"`
+}
+
+type autonomyPhaseHistoryItem struct {
+	ID            string  `json:"id"`
+	PreviousPhase string  `json:"previous_phase,omitempty"`
+	NewPhase      string  `json:"new_phase,omitempty"`
+	ChangedBy     *string `json:"changed_by,omitempty"`
+	CreatedAt     string  `json:"created_at,omitempty"`
+}
+
+type autonomyTransitionHistoryResponse struct {
+	Days      int             `json:"days"`
+	Snapshots []AutonomyTrend `json:"snapshots"`
+}
+
+type autonomyTransitionTrendsResponse struct {
+	Days   int             `json:"days"`
+	Trends []AutonomyTrend `json:"trends"`
+}
+
+type autonomyRecommendationEnvelope struct {
+	Recommendation *AutonomyRecommendation `json:"recommendation"`
+	Message        string                  `json:"message,omitempty"`
 }
 
 var (
@@ -239,10 +290,28 @@ func runAutonomyHistory(client *apiclient.Client, out io.Writer, jsonOutput bool
 	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
 	defer cancel()
 
-	history, err := apiclient.DoList[AutonomyHistory](client, ctx, "GET",
+	resp, err := apiclient.Do[autonomyPhaseHistoryResponse](client, ctx, "GET",
 		"/api/v1/workspaces/"+workspaceID+"/autonomy/phase/history", nil)
-	if err != nil {
-		return fmt.Errorf("자율성 단계 이력 조회 실패: %w", err)
+	history := make([]AutonomyHistory, 0)
+	if err == nil {
+		for _, log := range resp.Logs {
+			changedBy := ""
+			if log.ChangedBy != nil {
+				changedBy = *log.ChangedBy
+			}
+			history = append(history, AutonomyHistory{
+				ID:        log.ID,
+				Phase:     log.NewPhase,
+				ChangedAt: log.CreatedAt,
+				ChangedBy: changedBy,
+			})
+		}
+	} else {
+		history, err = apiclient.DoList[AutonomyHistory](client, ctx, "GET",
+			"/api/v1/workspaces/"+workspaceID+"/autonomy/phase/history", nil)
+		if err != nil {
+			return fmt.Errorf("자율성 단계 이력 조회 실패: %w", err)
+		}
 	}
 
 	if jsonOutput {
@@ -252,11 +321,7 @@ func runAutonomyHistory(client *apiclient.Client, out io.Writer, jsonOutput bool
 	headers := []string{"ID", "PHASE", "CHANGED_AT", "CHANGED_BY"}
 	rows := make([][]string, len(history))
 	for i, h := range history {
-		shortID := h.ID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
-		rows[i] = []string{shortID, h.Phase, h.ChangedAt, h.ChangedBy}
+		rows[i] = []string{h.ID, h.Phase, h.ChangedAt, h.ChangedBy}
 	}
 	apiclient.PrintTable(out, headers, rows)
 	return nil
@@ -279,10 +344,21 @@ func runAutonomyReadiness(client *apiclient.Client, out io.Writer, jsonOutput bo
 		return apiclient.PrintJSON(out, readiness)
 	}
 
+	score := readiness.Score
+	if score == 0 && readiness.ReadyScore != 0 {
+		score = readiness.ReadyScore
+	}
+	nextPhase := readiness.TargetPhase
+	if readiness.NextPhase != "" {
+		nextPhase = readiness.NextPhase
+	}
+
 	apiclient.PrintDetail(out, []apiclient.KeyValue{
 		{Key: "CurrentPhase", Value: readiness.CurrentPhase},
-		{Key: "NextPhase", Value: readiness.NextPhase},
-		{Key: "ReadyScore", Value: fmt.Sprintf("%.2f", readiness.ReadyScore)},
+		{Key: "NextPhase", Value: nextPhase},
+		{Key: "ReadyScore", Value: fmt.Sprintf("%.2f", score)},
+		{Key: "ConsecutiveDays", Value: fmt.Sprintf("%d", readiness.ConsecutiveDays)},
+		{Key: "IsEligible", Value: fmt.Sprintf("%v", readiness.IsEligible)},
 		{Key: "Blockers", Value: readiness.Blockers},
 	})
 	return nil
@@ -295,24 +371,33 @@ func runAutonomyTransitionHistory(client *apiclient.Client, out io.Writer, jsonO
 	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
 	defer cancel()
 
-	history, err := apiclient.DoList[AutonomyHistory](client, ctx, "GET",
+	resp, err := apiclient.Do[autonomyTransitionHistoryResponse](client, ctx, "GET",
 		"/api/v1/workspaces/"+workspaceID+"/autonomy/transition/history", nil)
-	if err != nil {
-		return fmt.Errorf("자율성 전환 이력 조회 실패: %w", err)
+	snapshots := []AutonomyTrend{}
+	if err == nil {
+		snapshots = resp.Snapshots
+	} else {
+		legacy, legacyErr := apiclient.DoList[AutonomyHistory](client, ctx, "GET",
+			"/api/v1/workspaces/"+workspaceID+"/autonomy/transition/history", nil)
+		if legacyErr != nil {
+			return fmt.Errorf("자율성 전환 이력 조회 실패: %w", err)
+		}
+		for _, item := range legacy {
+			snapshots = append(snapshots, AutonomyTrend{
+				CurrentPhase: item.Phase,
+				SnapshotAt:   item.ChangedAt,
+			})
+		}
 	}
 
 	if jsonOutput {
-		return apiclient.PrintJSON(out, history)
+		return apiclient.PrintJSON(out, snapshots)
 	}
 
-	headers := []string{"ID", "PHASE", "CHANGED_AT", "CHANGED_BY"}
-	rows := make([][]string, len(history))
-	for i, h := range history {
-		shortID := h.ID
-		if len(shortID) > 8 {
-			shortID = shortID[:8]
-		}
-		rows[i] = []string{shortID, h.Phase, h.ChangedAt, h.ChangedBy}
+	headers := []string{"SNAPSHOT_AT", "CURRENT_PHASE", "TARGET_PHASE", "READINESS"}
+	rows := make([][]string, len(snapshots))
+	for i, h := range snapshots {
+		rows[i] = []string{h.SnapshotAt, h.CurrentPhase, h.TargetPhase, fmt.Sprintf("%.2f", h.ReadinessScore)}
 	}
 	apiclient.PrintTable(out, headers, rows)
 	return nil
@@ -325,20 +410,35 @@ func runAutonomyTrends(client *apiclient.Client, out io.Writer, jsonOutput bool)
 	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
 	defer cancel()
 
-	trends, err := apiclient.DoList[AutonomyTrend](client, ctx, "GET",
+	resp, err := apiclient.Do[autonomyTransitionTrendsResponse](client, ctx, "GET",
 		"/api/v1/workspaces/"+workspaceID+"/autonomy/transition/trends", nil)
-	if err != nil {
-		return fmt.Errorf("자율성 추이 조회 실패: %w", err)
+	trends := []AutonomyTrend{}
+	if err == nil {
+		trends = resp.Trends
+	} else {
+		trends, err = apiclient.DoList[AutonomyTrend](client, ctx, "GET",
+			"/api/v1/workspaces/"+workspaceID+"/autonomy/transition/trends", nil)
+		if err != nil {
+			return fmt.Errorf("자율성 추이 조회 실패: %w", err)
+		}
 	}
 
 	if jsonOutput {
 		return apiclient.PrintJSON(out, trends)
 	}
 
-	headers := []string{"PERIOD", "SCORE"}
+	headers := []string{"SNAPSHOT_AT", "CURRENT_PHASE", "TARGET_PHASE", "READINESS"}
 	rows := make([][]string, len(trends))
 	for i, t := range trends {
-		rows[i] = []string{t.Period, fmt.Sprintf("%.2f", t.Score)}
+		snapshotAt := t.SnapshotAt
+		if snapshotAt == "" {
+			snapshotAt = t.Period
+		}
+		score := t.ReadinessScore
+		if score == 0 {
+			score = t.Score
+		}
+		rows[i] = []string{snapshotAt, t.CurrentPhase, t.TargetPhase, fmt.Sprintf("%.2f", score)}
 	}
 	apiclient.PrintTable(out, headers, rows)
 	return nil
@@ -351,20 +451,56 @@ func runAutonomyRecommendation(client *apiclient.Client, out io.Writer, jsonOutp
 	ctx, cancel := apiclient.NewContextWithTimeout(apiclient.DefaultAPITimeout)
 	defer cancel()
 
-	rec, err := apiclient.Do[AutonomyRecommendation](client, ctx, "GET",
+	resp, err := apiclient.Do[autonomyRecommendationEnvelope](client, ctx, "GET",
 		"/api/v1/workspaces/"+workspaceID+"/autonomy/transition/recommendation", nil)
-	if err != nil {
-		return fmt.Errorf("자율성 전환 추천 조회 실패: %w", err)
+	var rec *AutonomyRecommendation
+	message := ""
+	if err == nil {
+		rec = resp.Recommendation
+		message = resp.Message
+	}
+	if err != nil || (rec == nil && message == "") {
+		legacy, legacyErr := apiclient.Do[AutonomyRecommendation](client, ctx, "GET",
+			"/api/v1/workspaces/"+workspaceID+"/autonomy/transition/recommendation", nil)
+		if legacyErr != nil {
+			if err != nil {
+				return fmt.Errorf("자율성 전환 추천 조회 실패: %w", err)
+			}
+			return fmt.Errorf("자율성 전환 추천 조회 실패: %w", legacyErr)
+		}
+		rec = legacy
+	}
+
+	if rec == nil {
+		if jsonOutput {
+			return apiclient.PrintJSON(out, map[string]string{"message": message})
+		}
+		apiclient.PrintDetail(out, []apiclient.KeyValue{
+			{Key: "Message", Value: message},
+		})
+		return nil
 	}
 
 	if jsonOutput {
 		return apiclient.PrintJSON(out, rec)
 	}
 
+	recommendedPhase := rec.RecommendedPhase
+	if recommendedPhase == "" {
+		recommendedPhase = rec.TargetPhase
+	}
+	rationale := rec.Rationale
+	if rationale == "" {
+		rationale = rec.Reason
+	}
+
 	apiclient.PrintDetail(out, []apiclient.KeyValue{
-		{Key: "RecommendedPhase", Value: rec.RecommendedPhase},
+		{Key: "RecommendedPhase", Value: recommendedPhase},
+		{Key: "CurrentPhase", Value: rec.CurrentPhase},
+		{Key: "Type", Value: rec.Type},
 		{Key: "Confidence", Value: fmt.Sprintf("%.2f", rec.Confidence)},
-		{Key: "Rationale", Value: rec.Rationale},
+		{Key: "ReadinessScore", Value: fmt.Sprintf("%.2f", rec.ReadinessScore)},
+		{Key: "Rationale", Value: rationale},
 	})
 	return nil
 }

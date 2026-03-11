@@ -72,6 +72,36 @@ func TestRunObservabilityAgentsJSON(t *testing.T) {
 	}
 }
 
+func TestRunObservabilityAgentsWrappedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(map[string]interface{}{
+			"agents": []map[string]interface{}{
+				{
+					"agent_id":         "550e8400-e29b-41d4-a716-446655440000",
+					"agent_type":       "ceo",
+					"total_executions": 7,
+					"success_rate":     0.91,
+				},
+			},
+		}))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runObservabilityAgents(client, &buf, false)
+	if err != nil {
+		t.Fatalf("runObservabilityAgents wrapped 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "ceo") {
+		t.Errorf("출력에 'ceo'가 없습니다: %s", out)
+	}
+}
+
 func TestRunObservabilityAgentsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"success":false,"error":"server error"}`, http.StatusInternalServerError)

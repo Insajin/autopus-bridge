@@ -26,8 +26,8 @@ func TestAPIResponse_JSONRoundtrip(t *testing.T) {
 				if !resp.Success {
 					t.Errorf("Success = %v, want true", resp.Success)
 				}
-				if resp.Error != "" {
-					t.Errorf("Error = %q, want empty", resp.Error)
+				if resp.Error != nil {
+					t.Errorf("Error = %v, want nil", resp.Error)
 				}
 				if len(resp.Data) == 0 {
 					t.Error("Data가 비어있습니다")
@@ -42,11 +42,30 @@ func TestAPIResponse_JSONRoundtrip(t *testing.T) {
 				if resp.Success {
 					t.Errorf("Success = %v, want false", resp.Success)
 				}
-				if resp.Error != "NOT_FOUND" {
-					t.Errorf("Error = %q, want NOT_FOUND", resp.Error)
+				if resp.Error == nil || resp.Error.Message != "NOT_FOUND" {
+					t.Errorf("Error = %+v, want message NOT_FOUND", resp.Error)
 				}
 				if resp.Message != "리소스를 찾을 수 없습니다" {
 					t.Errorf("Message = %q, want 리소스를 찾을 수 없습니다", resp.Message)
+				}
+			},
+		},
+		{
+			name:  "구조화된 에러 응답",
+			input: `{"success":false,"error":{"code":"BAD_REQUEST","message":"잘못된 요청입니다"}}`,
+			check: func(t *testing.T, resp apiclient.APIResponse) {
+				t.Helper()
+				if resp.Success {
+					t.Errorf("Success = %v, want false", resp.Success)
+				}
+				if resp.Error == nil {
+					t.Fatal("Error가 nil입니다")
+				}
+				if resp.Error.Code != "BAD_REQUEST" {
+					t.Errorf("Error.Code = %q, want BAD_REQUEST", resp.Error.Code)
+				}
+				if resp.Error.Message != "잘못된 요청입니다" {
+					t.Errorf("Error.Message = %q, want 잘못된 요청입니다", resp.Error.Message)
 				}
 			},
 		},
