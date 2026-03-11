@@ -157,6 +157,48 @@ func TestValidateExecuteMode(t *testing.T) {
 	}
 }
 
+func TestImmediateExecutionStatus_UsesInlineResult(t *testing.T) {
+	status, ok := immediateExecutionStatus(&mcpserver.ExecuteTaskResponse{
+		ExecutionID: "exec-inline",
+		Result:      []byte(`{"output":"done"}`),
+	})
+	if !ok {
+		t.Fatal("expected immediate status")
+	}
+	if status.Status != "completed" {
+		t.Fatalf("status = %q, want %q", status.Status, "completed")
+	}
+	if status.ExecutionID != "exec-inline" {
+		t.Fatalf("execution_id = %q, want %q", status.ExecutionID, "exec-inline")
+	}
+	if string(status.Result) != `{"output":"done"}` {
+		t.Fatalf("result = %s", string(status.Result))
+	}
+}
+
+func TestImmediateExecutionStatus_UsesTerminalStatus(t *testing.T) {
+	status, ok := immediateExecutionStatus(&mcpserver.ExecuteTaskResponse{
+		ExecutionID: "exec-terminal",
+		Status:      "failed",
+	})
+	if !ok {
+		t.Fatal("expected immediate status")
+	}
+	if status.Status != "failed" {
+		t.Fatalf("status = %q, want %q", status.Status, "failed")
+	}
+}
+
+func TestImmediateExecutionStatus_PendingResponseFallsBackToPolling(t *testing.T) {
+	status, ok := immediateExecutionStatus(&mcpserver.ExecuteTaskResponse{
+		ExecutionID: "exec-pending",
+		Status:      "running",
+	})
+	if ok || status != nil {
+		t.Fatal("expected polling fallback")
+	}
+}
+
 func TestBuildExecutionStreamURL(t *testing.T) {
 	reset := saveExecuteFlags()
 	defer reset()

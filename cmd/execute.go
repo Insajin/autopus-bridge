@@ -168,21 +168,29 @@ func runExecute(cmd *cobra.Command, args []string) error {
 	}
 
 	if executeWait {
-		waitCtx := cmd.Context()
-		waitCancel := func() {}
-		if executeWaitLimit > 0 {
-			waitCtx, waitCancel = context.WithTimeout(cmd.Context(), executeWaitLimit)
-		}
-		defer waitCancel()
+		if status, ok := immediateExecutionStatus(result); ok {
+			output.Status = status.Status
+			output.Error = status.Error
+			if len(status.Result) > 0 {
+				output.Result = status.Result
+			}
+		} else {
+			waitCtx := cmd.Context()
+			waitCancel := func() {}
+			if executeWaitLimit > 0 {
+				waitCtx, waitCancel = context.WithTimeout(cmd.Context(), executeWaitLimit)
+			}
+			defer waitCancel()
 
-		status, waitErr := waitForExecution(waitCtx, client, result.ExecutionID, executeWaitPoll, cmd.ErrOrStderr(), executeJSON)
-		if waitErr != nil {
-			return waitErr
-		}
-		output.Status = status.Status
-		output.Error = status.Error
-		if len(status.Result) > 0 {
-			output.Result = status.Result
+			status, waitErr := waitForExecution(waitCtx, client, result.ExecutionID, executeWaitPoll, cmd.ErrOrStderr(), executeJSON)
+			if waitErr != nil {
+				return waitErr
+			}
+			output.Status = status.Status
+			output.Error = status.Error
+			if len(status.Result) > 0 {
+				output.Result = status.Result
+			}
 		}
 	}
 
@@ -211,6 +219,30 @@ func validateExecuteMode() error {
 		return errors.New("--stream does not support --json")
 	}
 	return nil
+}
+
+func immediateExecutionStatus(result *mcpserver.ExecuteTaskResponse) (*mcpserver.ExecutionStatus, bool) {
+	if result == nil {
+		return nil, false
+	}
+
+	if isTerminalExecutionStatus(result.Status) {
+		return &mcpserver.ExecutionStatus{
+			ExecutionID: result.ExecutionID,
+			Status:      result.Status,
+			Result:      result.Result,
+		}, true
+	}
+
+	if len(result.Result) > 0 {
+		return &mcpserver.ExecutionStatus{
+			ExecutionID: result.ExecutionID,
+			Status:      "completed",
+			Result:      result.Result,
+		}, true
+	}
+
+	return nil, false
 }
 
 func printExecuteOutput(output executeOutput) error {
