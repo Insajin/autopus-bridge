@@ -42,6 +42,25 @@ const (
 	AgentMsgCapabilityUpdate = "capability_update"
 )
 
+// KnowledgeSourceBinding is the bridge runtime view of a Knowledge Hub source binding.
+type KnowledgeSourceBinding struct {
+	SourceID   string   `json:"source_id"`
+	SourceType string   `json:"source_type,omitempty"`
+	SourceRoot string   `json:"source_root"`
+	SyncMode   string   `json:"sync_mode,omitempty"`
+	WriteScope []string `json:"write_scope,omitempty"`
+}
+
+// BridgeRuntimeContext captures how the local workspace is bound to Knowledge Hub.
+type BridgeRuntimeContext struct {
+	WorkspaceRoot           string                   `json:"workspace_root,omitempty"`
+	KnowledgeSourceBindings []KnowledgeSourceBinding `json:"knowledge_source_bindings,omitempty"`
+	SyncMode                string                   `json:"sync_mode,omitempty"`
+	IgnoreRulesLoaded       bool                     `json:"ignore_rules_loaded,omitempty"`
+	PendingLocalChanges     bool                     `json:"pending_local_changes,omitempty"`
+	WriteScope              []string                 `json:"write_scope,omitempty"`
+}
+
 // isAuthError는 에러 메시지가 인증 관련 에러인지 판단합니다.
 func isAuthError(err error) bool {
 	if err == nil {
@@ -167,6 +186,10 @@ type Client struct {
 	// capMu는 providerCapabilities 접근을 보호하는 뮤텍스입니다.
 	// SPEC-HOTSWAP-001: UpdateProviderCapabilities와 sendConnect의 동시 접근 보호
 	capMu sync.RWMutex
+	// runtimeMu는 bridge runtime context 접근을 보호합니다.
+	runtimeMu sync.RWMutex
+	// runtimeContext는 로컬 workspace root 와 Knowledge Hub binding 상태입니다.
+	runtimeContext *BridgeRuntimeContext
 
 	// state는 현재 연결 상태입니다.
 	state atomic.Int32
@@ -235,6 +258,13 @@ func WithCapabilities(capabilities []string) ClientOption {
 func WithProviderCapabilities(caps map[string]bool) ClientOption {
 	return func(c *Client) {
 		c.providerCapabilities = caps
+	}
+}
+
+// WithRuntimeContext sets the local workspace runtime context included in capability snapshots.
+func WithRuntimeContext(runtime *BridgeRuntimeContext) ClientOption {
+	return func(c *Client) {
+		c.runtimeContext = cloneRuntimeContext(runtime)
 	}
 }
 
@@ -436,13 +466,22 @@ func (c *Client) sendConnect() error {
 	c.capMu.RLock()
 	providerCaps := c.providerCapabilities
 	c.capMu.RUnlock()
+	c.runtimeMu.RLock()
+	runtimeCtx := cloneRuntimeContext(c.runtimeContext)
+	c.runtimeMu.RUnlock()
 
-	payload := ws.AgentConnectPayload{
-		Version:              c.version,
-		Capabilities:         c.capabilities,
-		ProviderCapabilities: providerCaps,
-		LastExecID:           lastExecID,
-		Token:                c.token,
+	payload := struct {
+		ws.AgentConnectPayload
+		RuntimeContext *BridgeRuntimeContext `json:"runtime_context,omitempty"`
+	}{
+		AgentConnectPayload: ws.AgentConnectPayload{
+			Version:              c.version,
+			Capabilities:         c.capabilities,
+			ProviderCapabilities: providerCaps,
+			LastExecID:           lastExecID,
+			Token:                c.token,
+		},
+		RuntimeContext: runtimeCtx,
 	}
 
 	// sendMessage 대신 직접 전송 (연결 과정 중이므로)
@@ -805,12 +844,93 @@ func (c *Client) UpdateProviderCapabilities(caps map[string]bool) {
 	}
 
 	type capabilityUpdatePayload struct {
-		Capabilities map[string]bool `json:"capabilities"`
+		Capabilities   map[string]bool       `json:"capabilities"`
+		RuntimeContext *BridgeRuntimeContext `json:"runtime_context,omitempty"`
 	}
-	payload := capabilityUpdatePayload{Capabilities: newCaps}
+	c.runtimeMu.RLock()
+	runtimeCtx := cloneRuntimeContext(c.runtimeContext)
+	c.runtimeMu.RUnlock()
+
+	payload := capabilityUpdatePayload{Capabilities: newCaps, RuntimeContext: runtimeCtx}
 	if err := c.sendMessage(AgentMsgCapabilityUpdate, payload); err != nil {
 		log.Printf("[HOTSWAP] capability_update 전송 실패: %v", err)
 	}
+}
+
+// UpdateRuntimeContext updates the workspace-root aware runtime snapshot.
+func (c *Client) UpdateRuntimeContext(runtime *BridgeRuntimeContext) {
+	c.runtimeMu.Lock()
+	if runtimeContextsEqual(c.runtimeContext, runtime) {
+		c.runtimeMu.Unlock()
+		return
+	}
+	c.runtimeContext = cloneRuntimeContext(runtime)
+	c.runtimeMu.Unlock()
+
+	if c.State() != StateConnected {
+		return
+	}
+
+	c.capMu.RLock()
+	caps := make(map[string]bool, len(c.providerCapabilities))
+	for k, v := range c.providerCapabilities {
+		caps[k] = v
+	}
+	c.capMu.RUnlock()
+
+	type capabilityUpdatePayload struct {
+		Capabilities   map[string]bool       `json:"capabilities"`
+		RuntimeContext *BridgeRuntimeContext `json:"runtime_context,omitempty"`
+	}
+	payload := capabilityUpdatePayload{
+		Capabilities:   caps,
+		RuntimeContext: cloneRuntimeContext(runtime),
+	}
+	if err := c.sendMessage(AgentMsgCapabilityUpdate, payload); err != nil {
+		log.Printf("[HOTSWAP] runtime_context 전송 실패: %v", err)
+	}
+}
+
+func cloneRuntimeContext(runtime *BridgeRuntimeContext) *BridgeRuntimeContext {
+	if runtime == nil {
+		return nil
+	}
+	cloned := &BridgeRuntimeContext{
+		WorkspaceRoot:       runtime.WorkspaceRoot,
+		SyncMode:            runtime.SyncMode,
+		IgnoreRulesLoaded:   runtime.IgnoreRulesLoaded,
+		PendingLocalChanges: runtime.PendingLocalChanges,
+		WriteScope:          append([]string(nil), runtime.WriteScope...),
+	}
+	if len(runtime.KnowledgeSourceBindings) > 0 {
+		cloned.KnowledgeSourceBindings = make([]KnowledgeSourceBinding, len(runtime.KnowledgeSourceBindings))
+		for i, binding := range runtime.KnowledgeSourceBindings {
+			cloned.KnowledgeSourceBindings[i] = KnowledgeSourceBinding{
+				SourceID:   binding.SourceID,
+				SourceType: binding.SourceType,
+				SourceRoot: binding.SourceRoot,
+				SyncMode:   binding.SyncMode,
+				WriteScope: append([]string(nil), binding.WriteScope...),
+			}
+		}
+	}
+	return cloned
+}
+
+func runtimeContextsEqual(a, b *BridgeRuntimeContext) bool {
+	switch {
+	case a == nil && b == nil:
+		return true
+	case a == nil || b == nil:
+		return false
+	default:
+		return string(mustJSON(a)) == string(mustJSON(b))
+	}
+}
+
+func mustJSON(v interface{}) []byte {
+	data, _ := json.Marshal(v)
+	return data
 }
 
 // SetTokenRefreshFunc은 재연결 전 토큰을 갱신하는 콜백을 설정합니다.

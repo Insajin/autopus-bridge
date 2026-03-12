@@ -44,7 +44,8 @@ func TestUpdateProviderCapabilities_SendsMessage(t *testing.T) {
 			t.Errorf("메시지 타입이 %s이어야 하나 %s입니다", AgentMsgCapabilityUpdate, msg.Type)
 		}
 		var payload struct {
-			Capabilities map[string]bool `json:"capabilities"`
+			Capabilities   map[string]bool       `json:"capabilities"`
+			RuntimeContext *BridgeRuntimeContext `json:"runtime_context,omitempty"`
 		}
 		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
 			t.Fatalf("페이로드 파싱 실패: %v", err)
@@ -55,8 +56,46 @@ func TestUpdateProviderCapabilities_SendsMessage(t *testing.T) {
 		if payload.Capabilities["gemini"] != false {
 			t.Errorf("gemini가 false여야 하나 %v입니다", payload.Capabilities["gemini"])
 		}
+		if payload.RuntimeContext != nil {
+			t.Errorf("runtime_context should be nil by default, got %+v", payload.RuntimeContext)
+		}
 	case <-time.After(2 * time.Second):
 		t.Error("capability_update 메시지가 수신되지 않았습니다")
+	}
+}
+
+func TestUpdateRuntimeContext_SendsMessage(t *testing.T) {
+	srv := newTestCapabilityServer(t)
+	defer srv.Close()
+
+	client := newConnectedClient(t, srv.URL)
+	defer client.Disconnect("test")
+
+	client.UpdateRuntimeContext(&BridgeRuntimeContext{
+		WorkspaceRoot: "/workspace/app",
+		SyncMode:      "mirror",
+		KnowledgeSourceBindings: []KnowledgeSourceBinding{
+			{SourceID: "source-1", SourceRoot: "docs", SyncMode: "mirror"},
+		},
+	})
+
+	select {
+	case msg := <-srv.received:
+		var payload struct {
+			Capabilities   map[string]bool       `json:"capabilities"`
+			RuntimeContext *BridgeRuntimeContext `json:"runtime_context,omitempty"`
+		}
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			t.Fatalf("페이로드 파싱 실패: %v", err)
+		}
+		if payload.RuntimeContext == nil {
+			t.Fatal("runtime_context 가 전송되어야 합니다")
+		}
+		if payload.RuntimeContext.WorkspaceRoot != "/workspace/app" {
+			t.Fatalf("WorkspaceRoot = %q", payload.RuntimeContext.WorkspaceRoot)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runtime_context 메시지가 수신되지 않았습니다")
 	}
 }
 

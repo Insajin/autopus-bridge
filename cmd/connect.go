@@ -23,11 +23,13 @@ import (
 	embeddedDocker "github.com/insajin/autopus-bridge/docker"
 	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/authwatch"
+	"github.com/insajin/autopus-bridge/internal/bridgecontext"
 	"github.com/insajin/autopus-bridge/internal/computeruse"
 	"github.com/insajin/autopus-bridge/internal/config"
 	"github.com/insajin/autopus-bridge/internal/executor"
 	"github.com/insajin/autopus-bridge/internal/logger"
 	"github.com/insajin/autopus-bridge/internal/mcp"
+	"github.com/insajin/autopus-bridge/internal/project"
 	"github.com/insajin/autopus-bridge/internal/provider"
 	"github.com/insajin/autopus-bridge/internal/scheduler"
 	"github.com/insajin/autopus-bridge/internal/websocket"
@@ -176,6 +178,19 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("프로바이더 초기화 실패: %w", err)
 	}
 
+	// 프로바이더 오버라이드 설정 적용
+	if cfg.Providers.Override.Provider != "" {
+		internalName := provider.ToInternalName(cfg.Providers.Override.Provider)
+		registry.SetOverride(provider.OverrideConfig{
+			ProviderName: internalName,
+			Model:        cfg.Providers.Override.Model,
+		})
+		logger.Info().
+			Str("provider", internalName).
+			Str("model", cfg.Providers.Override.Model).
+			Msg("프로바이더 오버라이드 설정 적용")
+	}
+
 	logger.Info().
 		Strs("providers", registry.List()).
 		Msg("AI 프로바이더 초기화 완료")
@@ -247,12 +262,14 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	// WebSocket 클라이언트 생성 (단일 인스턴스)
+	runtimeContext, runtimeRoot := loadBridgeRuntimeContext()
 	client := websocket.NewClient(
 		srvURL,
 		authToken,
 		version,
 		websocket.WithCapabilities(cfg.GetAvailableProviders()),
 		websocket.WithProviderCapabilities(providerCaps),
+		websocket.WithRuntimeContext(runtimeContext),
 		websocket.WithReconnectStrategy(reconnectStrategy),
 	)
 
@@ -379,6 +396,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		Str("state", client.State().String()).
 		Msg("서버 연결 성공")
 
+	if runtimeRoot != "" {
+		if err := router.SendProjectContext(runtimeRoot); err != nil {
+			logger.Warn().Err(err).Str("workspace_root", runtimeRoot).Msg("project_context 전송 실패")
+		}
+	}
+
 	// 상태 파일 저장
 	saveConnectionStatus(connState)
 
@@ -420,6 +443,66 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		Msg("연결 종료 완료")
 
 	return nil
+}
+
+func loadBridgeRuntimeContext() (*websocket.BridgeRuntimeContext, string) {
+	root := resolveRuntimeWorkspaceRoot()
+	if root == "" {
+		return nil, ""
+	}
+
+	manifest, err := bridgecontext.LoadManifest(root)
+	if err != nil {
+		return nil, ""
+	}
+
+	ctx := bridgecontext.BuildRuntimeContext(root, manifest)
+	if ctx == nil {
+		return nil, ""
+	}
+
+	bindings := make([]websocket.KnowledgeSourceBinding, 0, len(ctx.KnowledgeSourceBindings))
+	for _, binding := range ctx.KnowledgeSourceBindings {
+		bindings = append(bindings, websocket.KnowledgeSourceBinding{
+			SourceID:   binding.SourceID,
+			SourceType: binding.SourceType,
+			SourceRoot: binding.SourceRoot,
+			SyncMode:   binding.SyncMode,
+			WriteScope: append([]string(nil), binding.WriteScope...),
+		})
+	}
+
+	return &websocket.BridgeRuntimeContext{
+		WorkspaceRoot:           ctx.WorkspaceRoot,
+		KnowledgeSourceBindings: bindings,
+		SyncMode:                ctx.SyncMode,
+		IgnoreRulesLoaded:       ctx.IgnoreRulesLoaded,
+		PendingLocalChanges:     ctx.PendingLocalChanges,
+		WriteScope:              append([]string(nil), ctx.WriteScope...),
+	}, root
+}
+
+func resolveRuntimeWorkspaceRoot() string {
+	configPath := config.DefaultConfigPath()
+	configDir := filepath.Dir(configPath)
+
+	manager := project.NewManager(configDir)
+	if err := manager.LoadProjects(); err == nil {
+		if active, ok := manager.GetActive(); ok {
+			if active.Path != "" {
+				return active.Path
+			}
+		}
+	}
+
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	if _, statErr := os.Stat(bridgecontext.ManifestPath(wd)); statErr == nil {
+		return wd
+	}
+	return ""
 }
 
 // runEventLoop는 메인 이벤트 루프를 실행합니다.
@@ -647,7 +730,7 @@ type registryProviderAdapter struct {
 	p provider.Provider
 }
 
-func (a *registryProviderAdapter) Name() string         { return a.p.Name() }
+func (a *registryProviderAdapter) Name() string          { return a.p.Name() }
 func (a *registryProviderAdapter) ValidateConfig() error { return a.p.ValidateConfig() }
 
 // AuthFilePath는 빈 문자열을 반환합니다.
