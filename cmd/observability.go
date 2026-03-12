@@ -37,12 +37,13 @@ type ObservabilityExecution struct {
 }
 
 // ObservabilityCost는 비용 정보를 나타냅니다.
+// total_cost는 백엔드에서 숫자 또는 문자열로 반환될 수 있어 FlexFloat64를 사용합니다.
 type ObservabilityCost struct {
-	TotalCost       float64 `json:"total_cost"`
-	TotalTokens     int64   `json:"total_tokens,omitempty"`
-	TotalExecutions int     `json:"total_executions,omitempty"`
-	ByAgent         string  `json:"by_agent,omitempty"`
-	Period          string  `json:"period,omitempty"`
+	TotalCost       apiclient.FlexFloat64 `json:"total_cost"`
+	TotalTokens     int64                 `json:"total_tokens,omitempty"`
+	TotalExecutions int                   `json:"total_executions,omitempty"`
+	ByAgent         string                `json:"by_agent,omitempty"`
+	Period          string                `json:"period,omitempty"`
 }
 
 // ObservabilityHealth는 시스템 건강 상태를 나타냅니다.
@@ -353,7 +354,7 @@ func runObservabilityCost(client *apiclient.Client, out io.Writer, jsonOutput bo
 	}
 
 	apiclient.PrintDetail(out, []apiclient.KeyValue{
-		{Key: "TotalCost", Value: fmt.Sprintf("%.2f", cost.TotalCost)},
+		{Key: "TotalCost", Value: fmt.Sprintf("%.2f", cost.TotalCost.Float64())},
 		{Key: "TotalTokens", Value: fmt.Sprintf("%d", cost.TotalTokens)},
 		{Key: "TotalExecutions", Value: fmt.Sprintf("%d", cost.TotalExecutions)},
 	})

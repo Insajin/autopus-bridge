@@ -282,7 +282,7 @@ func TestRunObservabilityCostJSON(t *testing.T) {
 	if err := json.Unmarshal([]byte(strings.TrimSpace(buf.String())), &parsed); err != nil {
 		t.Fatalf("JSON 파싱 실패: %v, 출력: %s", err, buf.String())
 	}
-	if parsed.TotalCost != 12.34 {
+	if parsed.TotalCost.Float64() != 12.34 {
 		t.Errorf("예상치 않은 비용: %v", parsed.TotalCost)
 	}
 }
@@ -445,6 +445,29 @@ func TestRunObservabilityHealthError(t *testing.T) {
 	err := runObservabilityHealth(client, &buf, false)
 	if err == nil {
 		t.Fatal("에러가 예상되었으나 nil 반환")
+	}
+}
+
+// TestRunObservabilityCostStringValue는 total_cost가 문자열로 반환될 때를 검증합니다.
+func TestRunObservabilityCostStringValue(t *testing.T) {
+	// 백엔드가 total_cost를 문자열로 반환하는 케이스
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success":true,"data":{"total_cost":"45.67","total_tokens":1000,"total_executions":5,"period":"2026-03"}}`))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runObservabilityCost(client, &buf, false)
+	if err != nil {
+		t.Fatalf("runObservabilityCost 문자열 비용 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "45.67") {
+		t.Errorf("출력에 비용 정보가 없습니다: %s", out)
 	}
 }
 

@@ -267,6 +267,60 @@ func TestSSEEvent_JSONRoundtrip(t *testing.T) {
 	}
 }
 
+// TestFlexFloat64는 FlexFloat64의 숫자/문자열 양방향 역직렬화를 검증합니다.
+func TestFlexFloat64(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    float64
+		wantErr bool
+	}{
+		{name: "숫자 리터럴", input: `12.34`, want: 12.34},
+		{name: "정수 리터럴", input: `100`, want: 100},
+		{name: "문자열 숫자", input: `"45.67"`, want: 45.67},
+		{name: "문자열 정수", input: `"200"`, want: 200},
+		{name: "영", input: `0`, want: 0},
+		{name: "문자열 영", input: `"0"`, want: 0},
+		{name: "null", input: `null`, want: 0},
+		{name: "잘못된 문자열", input: `"abc"`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			var f apiclient.FlexFloat64
+			err := json.Unmarshal([]byte(tt.input), &f)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("에러를 기대했지만 성공했습니다")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("언마샬링 실패: %v", err)
+			}
+			if f.Float64() != tt.want {
+				t.Errorf("got %v, want %v", f.Float64(), tt.want)
+			}
+
+			// 마샬링 검증: 항상 숫자로 직렬화
+			data, err := json.Marshal(f)
+			if err != nil {
+				t.Fatalf("마샬링 실패: %v", err)
+			}
+			var f2 apiclient.FlexFloat64
+			if err := json.Unmarshal(data, &f2); err != nil {
+				t.Fatalf("재언마샬링 실패: %v", err)
+			}
+			if f2.Float64() != tt.want {
+				t.Errorf("재언마샬링 got %v, want %v", f2.Float64(), tt.want)
+			}
+		})
+	}
+}
+
 // TestKeyValue는 KeyValue 구조체의 기본 동작을 검증합니다.
 func TestKeyValue(t *testing.T) {
 	t.Parallel()

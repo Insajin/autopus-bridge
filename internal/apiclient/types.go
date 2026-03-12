@@ -2,7 +2,10 @@
 // BackendClient를 감싸는 편의 메서드와 출력 형식화 기능을 제공합니다.
 package apiclient
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strconv"
+)
 
 // APIError는 백엔드 오류 정보를 나타냅니다.
 // 문자열/객체 두 형식 모두 역직렬화할 수 있도록 커스텀 파서를 제공합니다.
@@ -78,6 +81,46 @@ type AgentTypingPayload struct {
 type SSEEvent struct {
 	Type string          `json:"type"`
 	Data json.RawMessage `json:"data"`
+}
+
+// FlexFloat64는 JSON에서 숫자 또는 문자열로 전달되는 float64 값을 역직렬화합니다.
+// 백엔드가 "12.34" (string) 또는 12.34 (number) 모두 반환할 수 있을 때 사용합니다.
+type FlexFloat64 float64
+
+// UnmarshalJSON은 숫자 또는 문자열 형식의 float64를 모두 허용합니다.
+func (f *FlexFloat64) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		return nil
+	}
+
+	// 숫자 리터럴 시도
+	var num float64
+	if err := json.Unmarshal(data, &num); err == nil {
+		*f = FlexFloat64(num)
+		return nil
+	}
+
+	// 문자열로 감싸진 숫자 시도
+	var str string
+	if err := json.Unmarshal(data, &str); err != nil {
+		return err
+	}
+	parsed, err := strconv.ParseFloat(str, 64)
+	if err != nil {
+		return err
+	}
+	*f = FlexFloat64(parsed)
+	return nil
+}
+
+// Float64는 기본 float64 값을 반환합니다.
+func (f FlexFloat64) Float64() float64 {
+	return float64(f)
+}
+
+// MarshalJSON은 숫자로 직렬화합니다.
+func (f FlexFloat64) MarshalJSON() ([]byte, error) {
+	return json.Marshal(float64(f))
 }
 
 // KeyValue는 상세 출력에서 사용하는 키-값 쌍입니다.
