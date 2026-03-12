@@ -480,8 +480,36 @@ func (r *Registry) GetForTask(providerName, model string) (Provider, error) {
 		}
 	}
 
-	// 3. Fall back to model-based resolution.
-	return r.GetForModel(model)
+	// 3. 모델명이 있으면 모델 기반 해석
+	if model != "" {
+		return r.GetForModel(model)
+	}
+
+	// 4. provider와 model 모두 비어있으면 등록된 첫 번째 프로바이더로 폴백
+	// 서버가 빈 model을 전송하는 경우 대응 (에이전트 설정이 Bridge에 전달되지 않을 때)
+	return r.GetFirstAvailable()
+}
+
+// GetFirstAvailable은 등록된 프로바이더 중 첫 번째 사용 가능한 것을 반환합니다.
+// 우선순위: codex > claude > gemini > 나머지
+func (r *Registry) GetFirstAvailable() (Provider, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// 우선순위 순으로 확인
+	priorityOrder := []string{"codex", "claude", "gemini"}
+	for _, name := range priorityOrder {
+		if p, ok := r.providers[name]; ok {
+			return p, nil
+		}
+	}
+
+	// 우선순위 목록에 없는 프로바이더라도 있으면 반환
+	for _, p := range r.providers {
+		return p, nil
+	}
+
+	return nil, fmt.Errorf("%w: 등록된 프로바이더가 없습니다", ErrProviderNotFound)
 }
 
 // initializeGeminiProvider는 설정된 모드에 따라 Gemini 프로바이더를 초기화합니다.

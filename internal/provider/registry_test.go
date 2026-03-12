@@ -365,6 +365,91 @@ func TestGeminiProviderSupports(t *testing.T) {
 	}
 }
 
+// TestGetForTask_EmptyModelFallback은 provider와 model이 모두 빈 경우
+// 등록된 첫 번째 프로바이더로 폴백하는 동작을 테스트합니다.
+func TestGetForTask_EmptyModelFallback(t *testing.T) {
+	t.Run("codex 우선순위", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "claude"})
+		r.Register(&mockProvider{name: "codex"})
+
+		p, err := r.GetForTask("", "")
+		if err != nil {
+			t.Fatalf("GetForTask('', '') 실패: %v", err)
+		}
+		if p.Name() != "codex" {
+			t.Errorf("codex가 우선이어야 합니다, got %s", p.Name())
+		}
+	})
+
+	t.Run("codex 없으면 claude", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "claude"})
+		r.Register(&mockProvider{name: "gemini"})
+
+		p, err := r.GetForTask("", "")
+		if err != nil {
+			t.Fatalf("GetForTask('', '') 실패: %v", err)
+		}
+		if p.Name() != "claude" {
+			t.Errorf("claude가 우선이어야 합니다, got %s", p.Name())
+		}
+	})
+
+	t.Run("등록된 프로바이더 없으면 에러", func(t *testing.T) {
+		r := NewRegistry()
+
+		_, err := r.GetForTask("", "")
+		if err == nil {
+			t.Fatal("빈 레지스트리에서 에러가 반환되어야 합니다")
+		}
+	})
+
+	t.Run("model이 있으면 모델 기반 해석", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "codex"})
+		r.Register(&mockProvider{name: "claude"})
+
+		p, err := r.GetForTask("", "claude-sonnet-4-20250514")
+		if err != nil {
+			t.Fatalf("GetForTask('', 'claude-sonnet-4-20250514') 실패: %v", err)
+		}
+		if p.Name() != "claude" {
+			t.Errorf("claude가 반환되어야 합니다, got %s", p.Name())
+		}
+	})
+}
+
+// TestGetFirstAvailable은 우선순위 기반 프로바이더 선택을 테스트합니다.
+func TestGetFirstAvailable(t *testing.T) {
+	t.Run("우선순위 순서 codex > claude > gemini", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "gemini"})
+		r.Register(&mockProvider{name: "codex"})
+
+		p, err := r.GetFirstAvailable()
+		if err != nil {
+			t.Fatalf("GetFirstAvailable() 실패: %v", err)
+		}
+		if p.Name() != "codex" {
+			t.Errorf("codex가 우선이어야 합니다, got %s", p.Name())
+		}
+	})
+
+	t.Run("임의 프로바이더 폴백", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "custom-provider"})
+
+		p, err := r.GetFirstAvailable()
+		if err != nil {
+			t.Fatalf("GetFirstAvailable() 실패: %v", err)
+		}
+		if p.Name() != "custom-provider" {
+			t.Errorf("custom-provider가 반환되어야 합니다, got %s", p.Name())
+		}
+	})
+}
+
 // isClaudeModel은 Claude 모델인지 확인합니다 (테스트용 헬퍼).
 func isClaudeModel(model string) bool {
 	if len(model) < 7 {

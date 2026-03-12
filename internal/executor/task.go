@@ -279,6 +279,12 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 	}
 
 	// 프로바이더 조회 (REQ-E-02): 명시적 provider 필드 우선, 없으면 모델명 기반 해석
+	// 서버가 빈 model/provider를 전송하면 등록된 기본 프로바이더로 폴백
+	if task.Provider == "" && task.Model == "" {
+		e.logger.Warn().
+			Str("execution_id", task.ExecutionID).
+			Msg("서버에서 빈 provider/model 수신, 기본 프로바이더로 폴백")
+	}
 	prov, err := e.registry.GetForTask(task.Provider, task.Model)
 	if err != nil {
 		e.logger.Error().
