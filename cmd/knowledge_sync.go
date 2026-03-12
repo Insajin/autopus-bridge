@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -21,6 +22,8 @@ var (
 	syncExcludeExtra   string
 	syncBandwidthLimit float64
 )
+
+var errKnowledgeSyncNotImplemented = errors.New("knowledge sync transport is not implemented yet")
 
 // knowledgeSyncCmd 는 `autopus knowledge sync` 커맨드입니다.
 // 로컬 폴더와 Knowledge Hub 소스를 양방향 동기화합니다.
@@ -55,10 +58,6 @@ func init() {
 
 	_ = knowledgeSyncCmd.MarkFlagRequired("folder")
 	_ = knowledgeSyncCmd.MarkFlagRequired("source-id")
-
-	// knowledge 커맨드에 sync 서브커맨드를 추가
-	// knowledge.go 의 init() 보다 나중에 실행되므로 knowledgeCmd 가 존재함
-	knowledgeCmd.AddCommand(knowledgeSyncCmd)
 }
 
 // runKnowledgeSync 는 knowledge sync 커맨드를 실행합니다.
@@ -88,11 +87,7 @@ func runKnowledgeSync(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  감시 모드: %v\n", syncWatch)
 	fmt.Printf("  제외 패턴: %d개\n", len(excludePatterns))
 
-	if syncWatch {
-		return runWatchMode(excludePatterns)
-	}
-
-	return runOnceMode(excludePatterns)
+	return fmt.Errorf("%w (source_id=%s)", errKnowledgeSyncNotImplemented, syncSourceID)
 }
 
 // runOnceMode 는 일회성 동기화를 실행합니다.

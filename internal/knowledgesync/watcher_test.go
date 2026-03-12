@@ -54,6 +54,86 @@ func TestWatcher_DetectsFileCreate(t *testing.T) {
 	}
 }
 
+// TestWatcher_DetectsNestedFileCreate 는 기존 하위 디렉토리 파일 생성 이벤트를 검증합니다.
+func TestWatcher_DetectsNestedFileCreate(t *testing.T) {
+	tmpDir := t.TempDir()
+	nestedDir := filepath.Join(tmpDir, "docs", "nested")
+	if err := os.MkdirAll(nestedDir, 0755); err != nil {
+		t.Fatalf("Failed to create nested dir: %v", err)
+	}
+
+	w, err := NewWatcher(DefaultExcludePatterns)
+	if err != nil {
+		t.Fatalf("NewWatcher() unexpected error: %v", err)
+	}
+	defer w.Close()
+
+	if err := w.Add(tmpDir); err != nil {
+		t.Fatalf("Watcher.Add() unexpected error: %v", err)
+	}
+
+	events := w.Events()
+	testFile := filepath.Join(nestedDir, "deep.md")
+	if err := os.WriteFile(testFile, []byte("hello"), 0644); err != nil {
+		t.Fatalf("Failed to create nested file: %v", err)
+	}
+
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				t.Fatal("events channel closed before nested event arrived")
+			}
+			if filepath.Base(event.FilePath) == "deep.md" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("Watcher did not emit nested file event within 3 seconds")
+		}
+	}
+}
+
+// TestWatcher_DetectsNewSubdirectoryFileCreate 는 동적으로 생긴 하위 디렉토리도 감시되는지 검증합니다.
+func TestWatcher_DetectsNewSubdirectoryFileCreate(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	w, err := NewWatcher(DefaultExcludePatterns)
+	if err != nil {
+		t.Fatalf("NewWatcher() unexpected error: %v", err)
+	}
+	defer w.Close()
+
+	if err := w.Add(tmpDir); err != nil {
+		t.Fatalf("Watcher.Add() unexpected error: %v", err)
+	}
+
+	events := w.Events()
+	newDir := filepath.Join(tmpDir, "new-subdir")
+	if err := os.MkdirAll(newDir, 0755); err != nil {
+		t.Fatalf("Failed to create new subdir: %v", err)
+	}
+	testFile := filepath.Join(newDir, "later.md")
+	if err := os.WriteFile(testFile, []byte("hello"), 0644); err != nil {
+		t.Fatalf("Failed to create file in new subdir: %v", err)
+	}
+
+	deadline := time.After(4 * time.Second)
+	for {
+		select {
+		case event, ok := <-events:
+			if !ok {
+				t.Fatal("events channel closed before new subdir event arrived")
+			}
+			if filepath.Base(event.FilePath) == "later.md" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("Watcher did not emit event for file in new subdir within 4 seconds")
+		}
+	}
+}
+
 // TestWatcher_ExcludesSensitiveFiles 는 민감한 파일이 이벤트에서 제외되는지 검증합니다.
 func TestWatcher_ExcludesSensitiveFiles(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -160,5 +240,29 @@ loop:
 	// 5번 변경이 디바운싱으로 줄어들어야 합니다 (1-2개 이벤트 예상)
 	if eventCount > 3 {
 		t.Errorf("Debounce: got %d events for 5 rapid changes, expected <= 3", eventCount)
+	}
+}
+
+// TestWatcher_Close_ClosesEvents 는 Close 호출 시 events 채널이 닫히는지 검증합니다.
+func TestWatcher_Close_ClosesEvents(t *testing.T) {
+	t.Parallel()
+
+	w, err := NewWatcher(DefaultExcludePatterns)
+	if err != nil {
+		t.Fatalf("NewWatcher() unexpected error: %v", err)
+	}
+
+	events := w.Events()
+	if err := w.Close(); err != nil {
+		t.Fatalf("Watcher.Close() unexpected error: %v", err)
+	}
+
+	select {
+	case _, ok := <-events:
+		if ok {
+			t.Fatal("expected closed events channel")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("events channel was not closed within 2 seconds")
 	}
 }

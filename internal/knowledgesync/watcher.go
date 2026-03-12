@@ -1,6 +1,8 @@
 package knowledgesync
 
 import (
+	"io/fs"
+	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -36,9 +38,9 @@ type Watcher struct {
 	excludePatterns []string
 	events          chan WatcherChangeEvent
 	done            chan struct{}
+	closeOnce       sync.Once
 	mu              sync.Mutex
-	// debounce 맵: 파일 경로 → 마지막 이벤트 시각
-	debounceMap map[string]time.Time
+	watchedPaths    map[string]struct{}
 }
 
 // NewWatcher 는 새 Watcher 를 생성합니다.
@@ -54,7 +56,7 @@ func NewWatcher(excludePatterns []string) (*Watcher, error) {
 		excludePatterns: excludePatterns,
 		events:          make(chan WatcherChangeEvent, eventChannelBuffer),
 		done:            make(chan struct{}),
-		debounceMap:     make(map[string]time.Time),
+		watchedPaths:    make(map[string]struct{}),
 	}
 
 	go w.run()
@@ -64,7 +66,29 @@ func NewWatcher(excludePatterns []string) (*Watcher, error) {
 
 // Add 는 감시 대상 디렉토리를 추가합니다.
 func (w *Watcher) Add(path string) error {
-	return w.fsWatcher.Add(path)
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return w.addWatch(path)
+	}
+
+	root := filepath.Clean(path)
+	return filepath.WalkDir(root, func(current string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !d.IsDir() {
+			return nil
+		}
+
+		normalized := filepath.ToSlash(current)
+		if current != root && IsExcluded(normalized, w.excludePatterns) {
+			return filepath.SkipDir
+		}
+		return w.addWatch(current)
+	})
 }
 
 // Events 는 파일 변경 이벤트 채널을 반환합니다.
@@ -74,8 +98,12 @@ func (w *Watcher) Events() <-chan WatcherChangeEvent {
 
 // Close 는 파일 감시자를 종료합니다.
 func (w *Watcher) Close() error {
-	close(w.done)
-	return w.fsWatcher.Close()
+	var closeErr error
+	w.closeOnce.Do(func() {
+		close(w.done)
+		closeErr = w.fsWatcher.Close()
+	})
+	return closeErr
 }
 
 // run 은 fsnotify 이벤트를 처리하는 고루틴입니다.
@@ -84,6 +112,8 @@ func (w *Watcher) Close() error {
 // @MX:REASON: Close() 호출 없이 watcher 를 버리면 고루틴 누수가 발생합니다
 // @MX:SPEC: SPEC-KHSOURCE-001
 func (w *Watcher) run() {
+	defer close(w.events)
+
 	ticker := time.NewTicker(debounceWindow)
 	defer ticker.Stop()
 
@@ -101,6 +131,16 @@ func (w *Watcher) run() {
 			}
 
 			path := filepath.ToSlash(event.Name)
+			var seededPaths []string
+			if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+				w.forgetWatch(event.Name)
+			}
+			if event.Op&fsnotify.Create != 0 {
+				if info, err := os.Stat(event.Name); err == nil && info.IsDir() {
+					_ = w.Add(event.Name)
+					seededPaths = w.listFiles(event.Name)
+				}
+			}
 
 			// 제외 패턴 검사
 			if IsExcluded(path, w.excludePatterns) {
@@ -115,6 +155,9 @@ func (w *Watcher) run() {
 
 			w.mu.Lock()
 			batch[path] = eventType
+			for _, seeded := range seededPaths {
+				batch[seeded] = "create"
+			}
 			w.mu.Unlock()
 
 		case <-ticker.C:
@@ -163,4 +206,59 @@ func fsnotifyOpToType(op fsnotify.Op) string {
 	default:
 		return ""
 	}
+}
+
+func (w *Watcher) addWatch(path string) error {
+	clean := filepath.Clean(path)
+
+	w.mu.Lock()
+	if _, exists := w.watchedPaths[clean]; exists {
+		w.mu.Unlock()
+		return nil
+	}
+	w.mu.Unlock()
+
+	if err := w.fsWatcher.Add(clean); err != nil {
+		return err
+	}
+
+	w.mu.Lock()
+	w.watchedPaths[clean] = struct{}{}
+	w.mu.Unlock()
+	return nil
+}
+
+func (w *Watcher) forgetWatch(path string) {
+	clean := filepath.Clean(path)
+
+	w.mu.Lock()
+	delete(w.watchedPaths, clean)
+	w.mu.Unlock()
+}
+
+func (w *Watcher) listFiles(path string) []string {
+	root := filepath.Clean(path)
+	files := make([]string, 0)
+
+	_ = filepath.WalkDir(root, func(current string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+
+		normalized := filepath.ToSlash(current)
+		if d.IsDir() {
+			if current != root && IsExcluded(normalized, w.excludePatterns) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if IsExcluded(normalized, w.excludePatterns) {
+			return nil
+		}
+
+		files = append(files, normalized)
+		return nil
+	})
+
+	return files
 }
