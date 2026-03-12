@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -11,13 +12,45 @@ import (
 
 // ScheduleInfo는 서버에서 가져온 스케줄 정보입니다.
 type ScheduleInfo struct {
-	ID             string `json:"id"`
-	Name           string `json:"name"`
-	CronExpression string `json:"cron_expression,omitempty"`
-	Timezone       string `json:"timezone,omitempty"`
-	TargetAgentID  string `json:"target_agent_id,omitempty"`
-	TaskTemplate   string `json:"task_template,omitempty"`
-	IsActive       bool   `json:"is_active"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	CronExpression string          `json:"cron_expression,omitempty"`
+	Timezone       string          `json:"timezone,omitempty"`
+	TargetAgentID  string          `json:"target_agent_id,omitempty"`
+	TaskTemplate   json.RawMessage `json:"task_template,omitempty"`
+	IsActive       bool            `json:"is_active"`
+}
+
+// GetPrompt는 TaskTemplate에서 프롬프트 문자열을 추출합니다.
+// string인 경우 그대로 반환하고, object인 경우 "prompt" 필드를 추출합니다.
+func (s *ScheduleInfo) GetPrompt() string {
+	if len(s.TaskTemplate) == 0 {
+		return ""
+	}
+
+	// string 시도
+	var str string
+	if err := json.Unmarshal(s.TaskTemplate, &str); err == nil {
+		return str
+	}
+
+	// object 시도 — prompt 필드 추출
+	var obj map[string]interface{}
+	if err := json.Unmarshal(s.TaskTemplate, &obj); err == nil {
+		if p, ok := obj["prompt"]; ok {
+			if ps, ok := p.(string); ok {
+				return ps
+			}
+		}
+		// prompt 필드 없으면 description 시도
+		if d, ok := obj["description"]; ok {
+			if ds, ok := d.(string); ok {
+				return ds
+			}
+		}
+	}
+
+	return ""
 }
 
 // ScheduleFetcher는 서버에서 스케줄 목록을 가져오는 인터페이스입니다.
@@ -140,7 +173,7 @@ func (d *Dispatcher) checkAndDispatch(ctx context.Context) {
 		}
 
 		// 실행 트리거
-		prompt := s.TaskTemplate
+		prompt := s.GetPrompt()
 		if prompt == "" {
 			prompt = fmt.Sprintf("[스케줄 자동 실행] %s", s.Name)
 		}

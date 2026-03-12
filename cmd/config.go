@@ -242,6 +242,11 @@ providers:
     # API 키는 환경변수로 설정하세요 (GEMINI_API_KEY)
     api_key_env: "GEMINI_API_KEY"
     default_model: "gemini-2.0-flash"
+  codex:
+    # API 키 또는 codex login으로 인증하세요
+    api_key_env: "OPENAI_API_KEY"
+    default_model: "gpt-5.4"
+    mode: "app-server"
 
 logging:
   level: "info"    # debug, info, warn, error

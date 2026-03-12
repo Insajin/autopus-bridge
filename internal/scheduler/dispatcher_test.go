@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"testing"
@@ -72,7 +73,7 @@ func TestDispatcher_CheckAndDispatch_MatchingSchedule(t *testing.T) {
 				Name:           "Daily Standup",
 				CronExpression: cronExpr,
 				TargetAgentID:  "agent-ceo",
-				TaskTemplate:   "일일 스탠드업 미팅 진행",
+				TaskTemplate:   json.RawMessage(`"일일 스탠드업 미팅 진행"`),
 				IsActive:       true,
 			},
 		},
@@ -360,6 +361,66 @@ func TestNewDispatcher_DefaultInterval(t *testing.T) {
 	d := NewDispatcher(nil, nil, zerolog.Nop(), 0)
 	if d.interval != 60*time.Second {
 		t.Errorf("기본 interval = %v, want 60s", d.interval)
+	}
+}
+
+func TestDispatcher_CheckAndDispatch_ObjectTaskTemplate(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	cronExpr := minuteHourCron(now.Minute(), now.Hour())
+
+	fetcher := &mockFetcher{
+		schedules: []ScheduleInfo{
+			{
+				ID:             "sched-obj",
+				Name:           "Object Template",
+				CronExpression: cronExpr,
+				TargetAgentID:  "agent-ceo",
+				TaskTemplate:   json.RawMessage(`{"prompt":"전략 리뷰를 진행해주세요","model":"gpt-5.4"}`),
+				IsActive:       true,
+			},
+		},
+	}
+	trigger := &mockTrigger{}
+	logger := zerolog.Nop()
+
+	d := NewDispatcher(fetcher, trigger, logger, 60*time.Second)
+	d.checkAndDispatch(context.Background())
+
+	execs := trigger.Executions()
+	if len(execs) != 1 {
+		t.Fatalf("실행 횟수 = %d, want 1", len(execs))
+	}
+	if execs[0].Prompt != "전략 리뷰를 진행해주세요" {
+		t.Errorf("Prompt = %q, want 전략 리뷰를 진행해주세요", execs[0].Prompt)
+	}
+}
+
+func TestScheduleInfo_GetPrompt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		template json.RawMessage
+		want     string
+	}{
+		{name: "string", template: json.RawMessage(`"안녕하세요"`), want: "안녕하세요"},
+		{name: "object with prompt", template: json.RawMessage(`{"prompt":"리뷰해줘"}`), want: "리뷰해줘"},
+		{name: "object with description", template: json.RawMessage(`{"description":"설명입니다"}`), want: "설명입니다"},
+		{name: "empty", template: nil, want: ""},
+		{name: "object no prompt", template: json.RawMessage(`{"model":"gpt-5.4"}`), want: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			s := ScheduleInfo{TaskTemplate: tt.template}
+			got := s.GetPrompt()
+			if got != tt.want {
+				t.Errorf("GetPrompt() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

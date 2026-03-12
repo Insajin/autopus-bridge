@@ -16,6 +16,8 @@ import (
 
 // Codex 지원 모델 목록
 var codexSupportedModels = []string{
+	// GPT-5.4
+	"gpt-5.4",
 	// GPT-5 Codex
 	"gpt-5-codex",
 	// O4 Mini

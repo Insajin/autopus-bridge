@@ -473,7 +473,7 @@ func writeSetupConfig(configPath string, providers []providerInfo, serverURL, wo
 			},
 			Codex: setupProviderEntry{
 				APIKeyEnv:    codexAPIKeyEnv,
-				DefaultModel: "o3-mini",
+				DefaultModel: "gpt-5.4",
 				Mode:         codexMode,
 			},
 		},
