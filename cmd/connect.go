@@ -29,6 +29,7 @@ import (
 	"github.com/insajin/autopus-bridge/internal/logger"
 	"github.com/insajin/autopus-bridge/internal/mcp"
 	"github.com/insajin/autopus-bridge/internal/provider"
+	"github.com/insajin/autopus-bridge/internal/scheduler"
 	"github.com/insajin/autopus-bridge/internal/websocket"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -398,6 +399,17 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	// 작업 실행기 시작
 	taskExecutor.Start(ctx)
 
+	// 스케줄 디스패처 시작 (에이전트 자율 운영)
+	apiClient, apiErr := newAPIClient()
+	if apiErr != nil {
+		logger.Warn().Err(apiErr).Msg("스케줄 디스패처용 API 클라이언트 생성 실패 - 디스패처 비활성화")
+	} else {
+		fetcher := scheduler.NewAPIScheduleFetcher(apiClient)
+		trigger := scheduler.NewAPITaskTrigger(apiClient)
+		schedDispatcher := scheduler.NewDispatcher(fetcher, trigger, log.Logger, 60*time.Second)
+		go schedDispatcher.Start(ctx)
+	}
+
 	// 종료 대기
 	wg.Wait()
 
@@ -507,10 +519,12 @@ func handleMessage(
 	case ws.AgentMsgTaskResult:
 		// 작업 완료 상태 업데이트
 		connState.IncrementTasksCompleted()
+		saveConnectionStatus(connState)
 
 	case ws.AgentMsgTaskError:
 		// 작업 오류 상태 업데이트
 		connState.IncrementTasksFailed()
+		saveConnectionStatus(connState)
 
 	default:
 		logger.Debug().
