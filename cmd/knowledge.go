@@ -346,6 +346,7 @@ func init() {
 	knowledgeCmd.AddCommand(knowledgeListCmd, knowledgeShowCmd, knowledgeSearchCmd)
 	knowledgeCmd.AddCommand(knowledgeCreateCmd, knowledgeUpdateCmd, knowledgeDeleteCmd)
 	knowledgeCmd.AddCommand(knowledgeUploadCmd, knowledgeStatsCmd, knowledgeFolderCmd)
+	knowledgeCmd.AddCommand(knowledgeSyncCmd)
 
 	knowledgeFolderCmd.AddCommand(knowledgeFolderListCmd, knowledgeFolderShowCmd)
 	knowledgeFolderCmd.AddCommand(knowledgeFolderCreateCmd, knowledgeFolderSyncCmd)

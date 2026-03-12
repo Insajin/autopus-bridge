@@ -14,13 +14,18 @@ import (
 
 // ---- 지식 항목(Entry) 관련 테스트 ----
 
-func TestKnowledgeSyncCommand_NotRegistered(t *testing.T) {
+func TestKnowledgeSyncCommand_Registered(t *testing.T) {
 	t.Parallel()
 
+	found := false
 	for _, sub := range knowledgeCmd.Commands() {
 		if sub.Name() == "sync" {
-			t.Fatal("knowledge sync command should not be registered until transport is implemented")
+			found = true
+			break
 		}
+	}
+	if !found {
+		t.Fatal("knowledge sync command should be registered")
 	}
 }
 
