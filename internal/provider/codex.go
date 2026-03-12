@@ -14,18 +14,6 @@ import (
 	"time"
 )
 
-// Codex 지원 모델 목록
-var codexSupportedModels = []string{
-	// GPT-5.4
-	"gpt-5.4",
-	// GPT-5 Codex
-	"gpt-5-codex",
-	// O4 Mini
-	"o4-mini",
-	// O3 Mini
-	"o3-mini",
-}
-
 // openAIChatRequest는 OpenAI Chat Completions API 요청 구조입니다.
 type openAIChatRequest struct {
 	Model     string              `json:"model"`
@@ -110,7 +98,7 @@ func NewCodexProvider(opts ...CodexProviderOption) (*CodexProvider, error) {
 			Timeout: 5 * time.Minute,
 		},
 		config: ProviderConfig{
-			DefaultModel: "gpt-5-codex",
+			DefaultModel: "gpt-5.4",
 			MaxRetries:   3,
 			RetryDelayMs: 1000,
 		},
@@ -150,30 +138,10 @@ func (p *CodexProvider) ValidateConfig() error {
 
 // Supports는 주어진 모델명을 지원하는지 확인합니다.
 // OpenRouter 형식(openai/o3-mini)과 레거시 형식 모두 지원합니다.
+// gpt-*, o4-*, o3- 접두사를 가진 모든 모델을 지원하여 새 버전 자동 반영.
 func (p *CodexProvider) Supports(model string) bool {
-	// OpenRouter 형식이면 접두사를 제거하고 확인
 	bare := StripProviderPrefix(model)
-
-	// gpt-, o4-, o3- 접두사로 시작하는지 확인
-	if !strings.HasPrefix(bare, "gpt-") && !strings.HasPrefix(bare, "o4-") && !strings.HasPrefix(bare, "o3-") {
-		return false
-	}
-
-	// 지원 모델 목록에서 확인
-	for _, supported := range codexSupportedModels {
-		if bare == supported {
-			return true
-		}
-	}
-
-	// gpt-5-*, o4-*, o3-* 패턴 매칭
-	if strings.HasPrefix(bare, "gpt-5-") ||
-		strings.HasPrefix(bare, "o4-") ||
-		strings.HasPrefix(bare, "o3-") {
-		return true
-	}
-
-	return false
+	return strings.HasPrefix(bare, "gpt-") || strings.HasPrefix(bare, "o4-") || strings.HasPrefix(bare, "o3-")
 }
 
 // Execute는 프롬프트를 실행하고 결과를 반환합니다.

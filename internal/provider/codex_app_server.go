@@ -356,6 +356,13 @@ func WithAppServerApprovalPolicy(policy string) CodexAppServerOption {
 	}
 }
 
+// WithAppServerDefaultModel은 App Server의 기본 모델을 설정합니다.
+func WithAppServerDefaultModel(model string) CodexAppServerOption {
+	return func(p *CodexAppServerProvider) {
+		p.config.DefaultModel = model
+	}
+}
+
 // WithAppServerAuth는 인증 방식을 설정합니다.
 // method:
 //   - "apiKey"            : key=API Key
@@ -406,14 +413,11 @@ func (p *CodexAppServerProvider) Name() string {
 
 // Supports는 주어진 모델명을 지원하는지 확인합니다.
 // OpenRouter 형식(openai/o3-mini)과 레거시 형식 모두 지원합니다.
+// Supports는 주어진 모델명을 지원하는지 확인합니다.
+// gpt-*, o4-*, o3- 접두사를 가진 모든 모델을 지원하여 새 버전 자동 반영.
 func (p *CodexAppServerProvider) Supports(model string) bool {
 	bare := StripProviderPrefix(model)
-	for _, supported := range codexSupportedModels {
-		if bare == supported {
-			return true
-		}
-	}
-	return false
+	return strings.HasPrefix(bare, "gpt-") || strings.HasPrefix(bare, "o4-") || strings.HasPrefix(bare, "o3-")
 }
 
 // ValidateConfig는 프로바이더 설정의 유효성을 검사합니다.
@@ -511,7 +515,10 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 	// 3. thread/start 호출
 	model := req.Model
 	if model == "" {
-		model = "gpt-5-codex"
+		model = p.config.DefaultModel
+		if model == "" {
+			model = "gpt-5.4"
+		}
 	}
 
 	cwd := req.WorkDir

@@ -80,9 +80,19 @@ type AuthConfig struct {
 
 // ProvidersConfig는 AI 프로바이더 설정입니다.
 type ProvidersConfig struct {
-	Claude ProviderConfig `mapstructure:"claude"`
-	Gemini ProviderConfig `mapstructure:"gemini"`
-	Codex  ProviderConfig `mapstructure:"codex"`
+	Claude   ProviderConfig  `mapstructure:"claude"`
+	Gemini   ProviderConfig  `mapstructure:"gemini"`
+	Codex    ProviderConfig  `mapstructure:"codex"`
+	Override OverrideConfig  `mapstructure:"override"`
+}
+
+// OverrideConfig는 모든 task_request를 특정 프로바이더/모델로 강제하는 설정입니다.
+// 서버에서 전달되는 provider/model 값과 무관하게 Bridge 측에서 강제 오버라이드합니다.
+type OverrideConfig struct {
+	// Provider는 강제 적용할 프로바이더 이름입니다 (예: "codex", "claude", "gemini").
+	Provider string `mapstructure:"provider"`
+	// Model은 강제 적용할 모델 이름입니다 (예: "gpt-5.4").
+	Model string `mapstructure:"model"`
 }
 
 // ProviderConfig는 개별 AI 프로바이더 설정입니다.

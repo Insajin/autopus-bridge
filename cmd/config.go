@@ -247,6 +247,10 @@ providers:
     api_key_env: "OPENAI_API_KEY"
     default_model: "gpt-5.4"
     mode: "app-server"
+  override:
+    # 모든 작업을 특정 프로바이더/모델로 강제 (비어있으면 서버 설정 사용)
+    # provider: codex
+    # model: gpt-5.4
 
 logging:
   level: "info"    # debug, info, warn, error

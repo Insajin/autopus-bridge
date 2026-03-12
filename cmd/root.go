@@ -122,6 +122,10 @@ func setDefaults() {
 	viper.SetDefault("providers.gemini.api_key_env", "GEMINI_API_KEY")
 	viper.SetDefault("providers.gemini.default_model", "gemini-2.0-flash")
 
+	// Codex 프로바이더 설정
+	viper.SetDefault("providers.codex.api_key_env", "OPENAI_API_KEY")
+	viper.SetDefault("providers.codex.default_model", "gpt-5.4")
+
 	// 로깅 설정
 	viper.SetDefault("logging.level", "info")
 	viper.SetDefault("logging.format", "json")

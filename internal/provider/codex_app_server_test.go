@@ -730,8 +730,8 @@ func TestCodexAppServerProvider_DefaultModel(t *testing.T) {
 	// 모델 확인
 	select {
 	case model := <-modelCh:
-		if model != "gpt-5-codex" {
-			t.Errorf("기본 모델: got %q, want %q", model, "gpt-5-codex")
+		if model != "gpt-5.4" {
+			t.Errorf("기본 모델: got %q, want %q", model, "gpt-5.4")
 		}
 	case <-time.After(5 * time.Second):
 		t.Error("모델 확인 타임아웃")

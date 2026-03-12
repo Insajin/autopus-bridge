@@ -450,6 +450,138 @@ func TestGetFirstAvailable(t *testing.T) {
 	})
 }
 
+// TestResolveForTask는 통합 프로바이더/모델 해석을 테스트합니다.
+func TestResolveForTask(t *testing.T) {
+	t.Run("서버 유효값 우선 (override 있어도 서버값 사용)", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "codex"})
+		r.Register(&mockProvider{name: "claude"})
+
+		r.SetOverride(OverrideConfig{
+			ProviderName: "codex",
+			Model:        "gpt-5.4",
+		})
+
+		// 서버가 anthropic/claude-sonnet-4-6 지정 → claude로 해석되어야 함
+		res, err := r.ResolveForTask("anthropic", "anthropic/claude-sonnet-4-6")
+		if err != nil {
+			t.Fatalf("ResolveForTask() 실패: %v", err)
+		}
+		if res.Provider.Name() != "claude" {
+			t.Errorf("서버 지정값 claude가 우선이어야 합니다, got %s", res.Provider.Name())
+		}
+		if res.Model != "claude-sonnet-4-6" {
+			t.Errorf("접두사 제거된 모델이어야 합니다, got %s", res.Model)
+		}
+		if res.Source != ResolutionSourceServer {
+			t.Errorf("source가 server여야 합니다, got %s", res.Source)
+		}
+	})
+
+	t.Run("빈 provider/model + override → override 폴백", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "codex"})
+
+		r.SetOverride(OverrideConfig{
+			ProviderName: "codex",
+			Model:        "gpt-5.4",
+		})
+
+		res, err := r.ResolveForTask("", "")
+		if err != nil {
+			t.Fatalf("ResolveForTask() 실패: %v", err)
+		}
+		if res.Provider.Name() != "codex" {
+			t.Errorf("override codex로 폴백해야 합니다, got %s", res.Provider.Name())
+		}
+		if res.Model != "gpt-5.4" {
+			t.Errorf("override 모델 gpt-5.4여야 합니다, got %s", res.Model)
+		}
+		if res.Source != ResolutionSourceOverride {
+			t.Errorf("source가 override여야 합니다, got %s", res.Source)
+		}
+	})
+
+	t.Run("서버값 해석 실패 + override → override 폴백", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "codex"})
+		// "deepseek" 프로바이더 미등록 → 해석 실패
+
+		r.SetOverride(OverrideConfig{
+			ProviderName: "codex",
+			Model:        "gpt-5.4",
+		})
+
+		res, err := r.ResolveForTask("deepseek", "deepseek/deepseek-r3")
+		if err != nil {
+			t.Fatalf("ResolveForTask() 실패: %v", err)
+		}
+		if res.Provider.Name() != "codex" {
+			t.Errorf("해석 실패 시 override codex로 폴백해야 합니다, got %s", res.Provider.Name())
+		}
+		if res.Source != ResolutionSourceOverride {
+			t.Errorf("source가 override여야 합니다, got %s", res.Source)
+		}
+	})
+
+	t.Run("override 프로바이더 미등록 시 에러", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "claude"})
+
+		r.SetOverride(OverrideConfig{
+			ProviderName: "codex", // 미등록
+			Model:        "gpt-5.4",
+		})
+
+		// 서버값 없고, override 프로바이더도 미등록
+		_, err := r.ResolveForTask("", "")
+		if err == nil {
+			t.Fatal("미등록 override 프로바이더에서 에러가 반환되어야 합니다")
+		}
+	})
+
+	t.Run("override 없이 빈 값 → fallback", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "codex"})
+		r.Register(&mockProvider{name: "claude"})
+
+		res, err := r.ResolveForTask("", "")
+		if err != nil {
+			t.Fatalf("ResolveForTask() 실패: %v", err)
+		}
+		if res.Provider.Name() != "codex" {
+			t.Errorf("codex가 우선순위 1이어야 합니다, got %s", res.Provider.Name())
+		}
+		if res.Source != ResolutionSourceFallback {
+			t.Errorf("source가 fallback이어야 합니다, got %s", res.Source)
+		}
+	})
+
+	t.Run("override model 빈 → 원래 model strip 사용", func(t *testing.T) {
+		r := NewRegistry()
+		r.Register(&mockProvider{name: "codex"})
+
+		r.SetOverride(OverrideConfig{
+			ProviderName: "codex",
+			Model:        "", // 모델 override 없음
+		})
+
+		res, err := r.ResolveForTask("", "openai/gpt-5.4")
+		if err != nil {
+			t.Fatalf("ResolveForTask() 실패: %v", err)
+		}
+		// 서버가 openai/gpt-5.4를 보냈지만 codex가 등록되어 있으므로 GetForTask 성공
+		// → 서버값 우선
+		if res.Source != ResolutionSourceServer {
+			// openai/gpt-5.4는 codex로 해석 가능하므로 server source
+			t.Errorf("source가 server여야 합니다, got %s", res.Source)
+		}
+		if res.Model != "gpt-5.4" {
+			t.Errorf("접두사 제거된 모델이어야 합니다, got %s", res.Model)
+		}
+	})
+}
+
 // isClaudeModel은 Claude 모델인지 확인합니다 (테스트용 헬퍼).
 func isClaudeModel(model string) bool {
 	if len(model) < 7 {

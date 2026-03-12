@@ -16,12 +16,22 @@ import (
 	"github.com/insajin/autopus-bridge/internal/approval"
 )
 
+// OverrideConfig는 모든 task_request를 특정 프로바이더/모델로 강제하는 설정입니다.
+type OverrideConfig struct {
+	// ProviderName은 강제 적용할 프로바이더 내부 이름입니다 (예: "codex", "claude").
+	ProviderName string
+	// Model은 강제 적용할 모델 이름입니다 (예: "gpt-5.4").
+	Model string
+}
+
 // Registry는 AI 프로바이더를 관리하는 레지스트리입니다.
 // 스레드 안전하게 프로바이더를 등록하고 조회할 수 있습니다.
 type Registry struct {
 	// providers는 이름으로 인덱싱된 프로바이더 맵입니다.
 	providers map[string]Provider
-	// mu는 providers 맵 접근을 보호하는 뮤텍스입니다.
+	// override는 프로바이더/모델 강제 오버라이드 설정입니다.
+	override *OverrideConfig
+	// mu는 providers 맵 및 override 접근을 보호하는 뮤텍스입니다.
 	mu sync.RWMutex
 }
 
@@ -457,6 +467,88 @@ func initializeClaudeInteractiveProvider(cfg RegistryConfig, cliPath string, cli
 	return NewInteractiveClaudeCLIProvider(opts...)
 }
 
+// Resolution source 상수: ModelResolution.Source에 사용됩니다.
+const (
+	// ResolutionSourceServer는 서버가 지정한 provider/model이 해석된 경우입니다.
+	ResolutionSourceServer = "server"
+	// ResolutionSourceOverride는 서버 값이 비어있거나 해석 실패 시 override 폴백이 적용된 경우입니다.
+	ResolutionSourceOverride = "override"
+	// ResolutionSourceFallback은 override도 없을 때 기본 프로바이더가 사용된 경우입니다.
+	ResolutionSourceFallback = "fallback"
+)
+
+// ModelResolution은 프로바이더/모델 해석 결과입니다.
+// ResolveForTask의 반환값으로, 해석된 프로바이더, 실행용 모델명, 해석 경로를 포함합니다.
+type ModelResolution struct {
+	// Provider는 해석된 프로바이더입니다.
+	Provider Provider
+	// Model은 실행에 사용할 모델명입니다 (OpenRouter 접두사 제거됨).
+	Model string
+	// Source는 해석 경로입니다 ("server", "override", "fallback").
+	Source string
+}
+
+// SetOverride는 프로바이더/모델 폴백 오버라이드를 설정합니다.
+// 서버가 비어있거나 해석 불가능한 provider/model을 전송할 때 폴백으로 사용됩니다.
+func (r *Registry) SetOverride(cfg OverrideConfig) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.override = &cfg
+}
+
+// ResolveForTask는 통합 프로바이더/모델 해석을 수행합니다.
+// 해석 우선순위:
+//  1. SERVER: taskProvider/taskModel이 비어있지 않고 해석 가능한 경우
+//  2. OVERRIDE: 서버 값이 비어있거나 해석 실패 시, override 설정으로 폴백
+//  3. FALLBACK: override도 없을 때 등록된 첫 번째 프로바이더 (codex > claude > gemini)
+func (r *Registry) ResolveForTask(taskProvider, taskModel string) (*ModelResolution, error) {
+	// 1. 서버 지정값 우선: provider/model이 하나라도 있으면 해석 시도
+	if taskProvider != "" || taskModel != "" {
+		prov, err := r.GetForTask(taskProvider, taskModel)
+		if err == nil {
+			return &ModelResolution{
+				Provider: prov,
+				Model:    StripProviderPrefix(taskModel),
+				Source:   ResolutionSourceServer,
+			}, nil
+		}
+		// 서버 값 해석 실패 → override 폴백으로 이동
+	}
+
+	// 2. Override 폴백 (서버 값이 비어있거나 해석 실패)
+	r.mu.RLock()
+	override := r.override
+	r.mu.RUnlock()
+
+	if override != nil && override.ProviderName != "" {
+		p := r.Get(override.ProviderName)
+		if p == nil {
+			return nil, fmt.Errorf("%w: 오버라이드 프로바이더 '%s'가 등록되지 않았습니다",
+				ErrProviderNotFound, override.ProviderName)
+		}
+		model := override.Model
+		if model == "" {
+			model = StripProviderPrefix(taskModel)
+		}
+		return &ModelResolution{
+			Provider: p,
+			Model:    model,
+			Source:   ResolutionSourceOverride,
+		}, nil
+	}
+
+	// 3. 최후 폴백: 등록된 첫 번째 프로바이더
+	prov, err := r.GetFirstAvailable()
+	if err != nil {
+		return nil, err
+	}
+	return &ModelResolution{
+		Provider: prov,
+		Model:    StripProviderPrefix(taskModel),
+		Source:   ResolutionSourceFallback,
+	}, nil
+}
+
 // GetForTask resolves a provider using explicit provider name first,
 // falling back to model-based resolution.
 //
@@ -752,7 +844,7 @@ func initializeCodexAppServerProvider(cfg RegistryConfig, cliPath string, logger
 	}
 
 	if cfg.CodexDefaultModel != "" {
-		// Note: model is set per-request, not at provider level for app-server
+		opts = append(opts, WithAppServerDefaultModel(cfg.CodexDefaultModel))
 	}
 
 	return NewCodexAppServerProvider(cliPath, opts...)

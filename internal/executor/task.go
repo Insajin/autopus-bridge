@@ -285,7 +285,7 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 			Str("execution_id", task.ExecutionID).
 			Msg("서버에서 빈 provider/model 수신, 기본 프로바이더로 폴백")
 	}
-	prov, err := e.registry.GetForTask(task.Provider, task.Model)
+	resolution, err := e.registry.ResolveForTask(task.Provider, task.Model)
 	if err != nil {
 		e.logger.Error().
 			Str("execution_id", task.ExecutionID).
@@ -297,6 +297,27 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 			Code:    ErrorCodeProviderNotFound,
 			Message: fmt.Sprintf("모델 '%s'에 대한 프로바이더를 찾을 수 없습니다: %v", task.Model, err),
 		}
+	}
+
+	prov := resolution.Provider
+	execModel := resolution.Model
+
+	// Resolution source별 로깅
+	switch resolution.Source {
+	case provider.ResolutionSourceOverride:
+		e.logger.Warn().
+			Str("execution_id", task.ExecutionID).
+			Str("original_provider", task.Provider).
+			Str("original_model", task.Model).
+			Str("resolved_provider", prov.Name()).
+			Str("resolved_model", execModel).
+			Msg("서버 값 비어있거나 해석 실패, 오버라이드 폴백 적용")
+	case provider.ResolutionSourceFallback:
+		e.logger.Warn().
+			Str("execution_id", task.ExecutionID).
+			Str("resolved_provider", prov.Name()).
+			Str("resolved_model", execModel).
+			Msg("오버라이드 미설정, 기본 프로바이더 폴백")
 	}
 
 	// SPEC-INTERACTIVE-CLI-001: ApprovalRelay 지원 프로바이더에 승인 핸들러 설정
@@ -321,9 +342,6 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 	// 진행 상황 보고 고루틴 시작
 	progressDone := make(chan struct{})
 	go e.reportProgress(execCtx, task.ExecutionID, progressDone)
-
-	// 프로바이더 실행 (OpenRouter 접두사 제거: "anthropic/claude-opus-4-6" -> "claude-opus-4-6")
-	execModel := provider.StripProviderPrefix(task.Model)
 	req := provider.ExecuteRequest{
 		Prompt:       task.Prompt,
 		SystemPrompt: task.SystemPrompt,

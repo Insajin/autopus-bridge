@@ -92,7 +92,7 @@ func NewCodexCLIProvider(opts ...CodexCLIProviderOption) (*CodexCLIProvider, err
 		cliPath: "codex",
 		timeout: 5 * time.Minute,
 		config: ProviderConfig{
-			DefaultModel: "gpt-5-codex",
+			DefaultModel: "gpt-5.4",
 		},
 		approvalMode: "full-auto",
 		defaultArgs:  nil,
