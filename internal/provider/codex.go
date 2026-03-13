@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -307,12 +308,29 @@ func (p *CodexProvider) executeToolLoop(ctx context.Context, req ExecuteRequest)
 		maxTokens = 4096
 	}
 
+	tools := buildOpenAITools(req.ToolDefinitions)
+
+	// 디버그: 전송되는 도구 목록과 요청 내용 로깅
+	toolNames := make([]string, 0, len(tools))
+	for _, t := range tools {
+		toolNames = append(toolNames, t.Function.Name)
+	}
+	slog.Debug("executeToolLoop: 도구 전송", "tool_count", len(tools), "tool_names", toolNames)
+
 	chatReq := openAIChatRequest{
 		Model:      model,
 		Messages:   buildOpenAIToolLoopMessages(req),
 		MaxTokens:  maxTokens,
-		Tools:      buildOpenAITools(req.ToolDefinitions),
+		Tools:      tools,
 		ToolChoice: "auto",
+	}
+
+	if reqBody, err := json.Marshal(chatReq); err == nil {
+		preview := string(reqBody)
+		if len(preview) > 500 {
+			preview = preview[:500]
+		}
+		slog.Debug("executeToolLoop: 요청 본문 미리보기", "body_prefix", preview)
 	}
 
 	chatResp, err := p.doRequest(ctx, chatReq)
@@ -334,6 +352,9 @@ func (p *CodexProvider) executeToolLoop(ctx context.Context, req ExecuteRequest)
 			})
 		}
 	}
+
+	// 디버그: 응답 tool_calls 수와 finish_reason 로깅
+	slog.Debug("executeToolLoop: 응답 수신", "tool_calls_count", len(toolCalls), "finish_reason", stopReason)
 
 	tokenUsage := TokenUsage{
 		InputTokens:  chatResp.Usage.PromptTokens,
