@@ -113,6 +113,7 @@ type AgentConnectPayload struct {
 	ProtocolVersion      string          `json:"protocol_version,omitempty"`      // Shared wire contract version
 	Capabilities         []string        `json:"capabilities"`                    // Supported CLI list
 	ProviderCapabilities map[string]bool `json:"provider_capabilities,omitempty"` // 지원하는 프로바이더 목록 (SPEC-BRIDGE-GATEWAY-001)
+	WorkspaceID          string          `json:"workspace_id,omitempty"`          // Selected workspace scope for this bridge session
 	LastExecID           string          `json:"last_exec_id"`                    // Last processed execution ID (for reconnect)
 	Token                string          `json:"token"`                           // JWT token for message-based auth (FR-P2-02)
 }
@@ -472,6 +473,7 @@ const (
 	AuthErrorTokenExpired            = "token_expired"
 	AuthErrorTokenInvalid            = "token_invalid"
 	AuthErrorProtocolVersionMismatch = "protocol_version_mismatch"
+	AuthErrorWorkspaceRequired       = "workspace_required"
 )
 
 // IsCompatibleProtocolVersion reports whether the given version is wire-compatible

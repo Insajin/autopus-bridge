@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/insajin/autopus-bridge/internal/auth"
 	"github.com/insajin/autopus-bridge/internal/config"
 	"github.com/spf13/cobra"
 )
@@ -32,6 +34,8 @@ type StatusInfo struct {
 	TasksFailed int `json:"tasks_failed"`
 	// PID는 실행 중인 프로세스 ID입니다.
 	PID int `json:"pid,omitempty"`
+	// WorkspaceID는 이 상태가 속한 워크스페이스 ID입니다.
+	WorkspaceID string `json:"workspace_id,omitempty"`
 }
 
 // statusCmd는 현재 연결 상태를 확인하는 명령어입니다.
@@ -159,6 +163,9 @@ func printStatusFull(status *StatusInfo) error {
 	} else {
 		fmt.Println("상태:        연결되지 않음")
 	}
+	if status.WorkspaceID != "" {
+		fmt.Printf("워크스페이스: %s\n", status.WorkspaceID)
+	}
 
 	// 서버 URL
 	if status.ServerURL != "" {
@@ -205,11 +212,35 @@ func printStatusFull(status *StatusInfo) error {
 
 // getStatusFilePath는 상태 파일 경로를 반환합니다.
 func getStatusFilePath() string {
+	return getScopedStatusFilePath(resolveCurrentWorkspaceScopeID())
+}
+
+func getScopedStatusFilePath(workspaceID string) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return ""
 	}
-	return filepath.Join(home, ".config", "autopus", "status.json")
+	return filepath.Join(home, ".config", "autopus", scopedStatusFileName(workspaceID))
+}
+
+func scopedStatusFileName(workspaceID string) string {
+	if workspaceID == "" {
+		return "status.json"
+	}
+	return "status-" + sanitizeWorkspaceScope(workspaceID) + ".json"
+}
+
+func sanitizeWorkspaceScope(workspaceID string) string {
+	replacer := strings.NewReplacer("/", "_", "\\", "_", " ", "_", ":", "_")
+	return replacer.Replace(strings.TrimSpace(workspaceID))
+}
+
+func resolveCurrentWorkspaceScopeID() string {
+	creds, err := auth.Load()
+	if err != nil || creds == nil {
+		return ""
+	}
+	return strings.TrimSpace(creds.WorkspaceID)
 }
 
 // isProcessRunning은 주어진 PID의 프로세스가 실행 중인지 확인합니다.
@@ -255,7 +286,7 @@ func printEnvStatusForStatus(envVar string) {
 // SaveStatus는 현재 상태를 파일에 저장합니다.
 // connect 명령에서 사용됩니다.
 func SaveStatus(status *StatusInfo) error {
-	statusFile := getStatusFilePath()
+	statusFile := getScopedStatusFilePath(status.WorkspaceID)
 	if statusFile == "" {
 		return fmt.Errorf("상태 파일 경로를 찾을 수 없습니다")
 	}
@@ -280,7 +311,12 @@ func SaveStatus(status *StatusInfo) error {
 // ClearStatus는 상태 파일을 삭제합니다.
 // disconnect 시 사용됩니다.
 func ClearStatus() error {
-	statusFile := getStatusFilePath()
+	return ClearStatusForWorkspace(resolveCurrentWorkspaceScopeID())
+}
+
+// ClearStatusForWorkspace는 특정 워크스페이스 범위의 상태 파일을 삭제합니다.
+func ClearStatusForWorkspace(workspaceID string) error {
+	statusFile := getScopedStatusFilePath(workspaceID)
 	if statusFile == "" {
 		return nil
 	}

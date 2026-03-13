@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.0] - 2026-03-13
+
+### Added
+
+- 브리지 세션을 워크스페이스 단위로 분리하여 같은 로컬 유저가 여러 워크스페이스 브리지를 동시에 유지할 수 있도록 지원
+- `connect`, `login`, `up`에 `--replace` 옵션을 추가하여 같은 워크스페이스 범위의 기존 브리지 프로세스를 명시적으로 교체 가능
+
+### Fixed
+
+- `status`, `update`, runtime connect payload가 워크스페이스 스코프를 끝까지 전달하도록 정리하여 잘못된 세션을 집는 문제 수정
+- backend handshake가 `workspace_id`를 필수로 검증하도록 맞춰 workspace-less legacy 연결 차단
+
 ## [1.17.2] - 2026-03-12
 
 ### Fixed

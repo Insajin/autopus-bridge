@@ -79,12 +79,14 @@ var upCmd = &cobra.Command{
 
 var (
 	upForceRestart bool
+	upReplace      bool
 )
 
 func init() {
 	rootCmd.AddCommand(upCmd)
 
 	upCmd.Flags().BoolVar(&upForceRestart, "force", false, "처음부터 다시 시작합니다 (진행 상태 초기화)")
+	upCmd.Flags().BoolVar(&upReplace, "replace", false, "기존 bridge 연결 프로세스가 있으면 종료 후 새 세션으로 교체")
 }
 
 // runUp executes the unified up command with 6 sequential steps.
@@ -247,7 +249,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	fmt.Println()
 	// Delegate to the existing connect logic
-	connectErr := runConnect(cmd, nil)
+	connectErr := runConnectWithOptions(cmd, nil, connectRunOptions{
+		ReplaceExisting: upReplace,
+	})
 	if connectErr == nil {
 		return nil
 	}
@@ -270,7 +274,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 		fmt.Println("  서버에 다시 연결합니다...")
 		fmt.Println()
 
-		return runConnect(cmd, nil)
+		return runConnectWithOptions(cmd, nil, connectRunOptions{
+			ReplaceExisting: upReplace,
+		})
 	}
 
 	// 인증 외 에러는 그대로 반환

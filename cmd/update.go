@@ -124,12 +124,10 @@ func detectRunningConnectProcess() (*runningConnectProcess, error) {
 		}, nil
 	}
 
-	home, err := os.UserHomeDir()
+	lockPath, err := getConnectLockPath(resolveCurrentWorkspaceScopeID())
 	if err != nil {
 		return nil, err
 	}
-
-	lockPath := filepath.Join(home, ".config", "autopus", connectLockFileName)
 	pid, err := readLockPID(lockPath)
 	if err != nil || pid <= 0 || pid == os.Getpid() || !updateProcessRunningFn(pid) {
 		return nil, nil

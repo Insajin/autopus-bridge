@@ -173,6 +173,8 @@ type Client struct {
 	token string
 	// version은 에이전트 버전입니다.
 	version string
+	// workspaceID는 이 bridge 세션이 연결된 워크스페이스 범위입니다.
+	workspaceID string
 	// capabilities는 지원하는 CLI 목록입니다.
 	capabilities []string
 	// providerCapabilities는 지원하는 프로바이더 목록입니다 (SPEC-BRIDGE-GATEWAY-001).
@@ -265,6 +267,13 @@ func WithProviderCapabilities(caps map[string]bool) ClientOption {
 func WithRuntimeContext(runtime *BridgeRuntimeContext) ClientOption {
 	return func(c *Client) {
 		c.runtimeContext = cloneRuntimeContext(runtime)
+	}
+}
+
+// WithWorkspaceID sets the workspace scope included in agent_connect payloads.
+func WithWorkspaceID(workspaceID string) ClientOption {
+	return func(c *Client) {
+		c.workspaceID = strings.TrimSpace(workspaceID)
 	}
 }
 
@@ -484,6 +493,7 @@ func (c *Client) sendConnect() error {
 			ProtocolVersion:      ws.AgentProtocolVersion,
 			Capabilities:         c.capabilities,
 			ProviderCapabilities: providerCaps,
+			WorkspaceID:          c.workspaceID,
 			LastExecID:           lastExecID,
 			Token:                c.token,
 		},

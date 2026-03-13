@@ -43,6 +43,10 @@ var (
 	serverURL      string
 	token          string
 	connectTimeout int
+	connectReplace bool
+
+	connectProcessRunningFn = isProcessRunning
+	connectStopProcessFn    = stopRunningConnectProcess
 )
 
 const connectLockFileName = "connect.lock"
@@ -77,12 +81,26 @@ func init() {
 		"JWT 토큰 (또는 LAB_TOKEN 환경변수)")
 	connectCmd.Flags().IntVar(&connectTimeout, "timeout", 30,
 		"연결 타임아웃(초)")
+	connectCmd.Flags().BoolVar(&connectReplace, "replace", false,
+		"기존 bridge 연결 프로세스가 있으면 종료 후 새 세션으로 교체")
 }
 
 // runConnect는 connect 명령의 실행 로직입니다.
 func runConnect(cmd *cobra.Command, args []string) error {
+	return runConnectWithOptions(cmd, args, connectRunOptions{
+		ReplaceExisting: connectReplace,
+	})
+}
+
+type connectRunOptions struct {
+	ReplaceExisting bool
+}
+
+func runConnectWithOptions(cmd *cobra.Command, args []string, opts connectRunOptions) error {
+	scopeWorkspaceID := resolveCurrentWorkspaceScopeID()
+
 	// 단일 인스턴스 보장: 기존 connect 프로세스가 있으면 중복 실행 방지
-	lock, err := acquireConnectLock()
+	lock, err := acquireConnectLock(scopeWorkspaceID, opts.ReplaceExisting)
 	if err != nil {
 		return err
 	}
@@ -263,12 +281,14 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	// WebSocket 클라이언트 생성 (단일 인스턴스)
 	runtimeContext, runtimeRoot := loadBridgeRuntimeContext()
+	connectWorkspaceID := resolveCurrentWorkspaceScopeID()
 	client := websocket.NewClient(
 		srvURL,
 		authToken,
 		version,
 		websocket.WithCapabilities(cfg.GetAvailableProviders()),
 		websocket.WithProviderCapabilities(providerCaps),
+		websocket.WithWorkspaceID(connectWorkspaceID),
 		websocket.WithRuntimeContext(runtimeContext),
 		websocket.WithReconnectStrategy(reconnectStrategy),
 	)
@@ -353,6 +373,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	// 연결 상태 추적
 	connState := NewConnectionState()
+	connState.SetWorkspaceID(connectWorkspaceID)
 
 	// 연결 및 실행 루프
 	var wg sync.WaitGroup
@@ -753,6 +774,7 @@ type ConnectionState struct {
 	connected      bool
 	startTime      time.Time
 	serverURL      string
+	workspaceID    string
 	tasksCompleted int
 	tasksFailed    int
 	currentTaskID  string
@@ -837,6 +859,20 @@ func (s *ConnectionState) ServerURL() string {
 	return s.serverURL
 }
 
+// SetWorkspaceID는 워크스페이스 ID를 설정합니다.
+func (s *ConnectionState) SetWorkspaceID(workspaceID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workspaceID = strings.TrimSpace(workspaceID)
+}
+
+// WorkspaceID는 워크스페이스 ID를 반환합니다.
+func (s *ConnectionState) WorkspaceID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.workspaceID
+}
+
 // SetCurrentTaskID는 현재 작업 ID를 설정합니다.
 func (s *ConnectionState) SetCurrentTaskID(taskID string) {
 	s.mu.Lock()
@@ -862,6 +898,7 @@ func saveConnectionStatus(connState *ConnectionState) {
 		TasksFailed:    connState.TasksFailed(),
 		CurrentTask:    connState.CurrentTaskID(),
 		PID:            os.Getpid(),
+		WorkspaceID:    connState.WorkspaceID(),
 	}
 
 	if err := SaveStatus(status); err != nil {
@@ -893,16 +930,15 @@ func clearConnectionStatus() {
 }
 
 // acquireConnectLock은 connect.lock을 생성해 connect 단일 인스턴스를 보장합니다.
-func acquireConnectLock() (*connectLock, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, fmt.Errorf("홈 디렉토리 조회 실패: %w", err)
-	}
+func acquireConnectLock(workspaceID string, replaceExisting bool) (*connectLock, error) {
 	if err := config.EnsureConfigDir(); err != nil {
 		return nil, fmt.Errorf("설정 디렉토리 생성 실패: %w", err)
 	}
 
-	lockPath := filepath.Join(home, ".config", "autopus", connectLockFileName)
+	lockPath, err := getConnectLockPath(workspaceID)
+	if err != nil {
+		return nil, err
+	}
 	pid := os.Getpid()
 	pidStr := strconv.Itoa(pid)
 
@@ -926,8 +962,16 @@ func acquireConnectLock() (*connectLock, error) {
 		}
 
 		existingPID, pidErr := readLockPID(lockPath)
-		if pidErr == nil && existingPID > 0 && isProcessRunning(existingPID) {
-			return nil, fmt.Errorf("이미 실행 중인 bridge 연결 프로세스가 있습니다 (PID: %d)", existingPID)
+		if pidErr == nil && existingPID > 0 && connectProcessRunningFn(existingPID) {
+			if !replaceExisting {
+				return nil, fmt.Errorf(
+					"이미 실행 중인 bridge 연결 프로세스가 있습니다 (PID: %d). 새 세션으로 교체하려면 --replace를 사용하세요",
+					existingPID,
+				)
+			}
+			if err := connectStopProcessFn(existingPID); err != nil {
+				return nil, fmt.Errorf("기존 bridge 연결 프로세스 종료 실패 (PID: %d): %w", existingPID, err)
+			}
 		}
 		if pidErr != nil {
 			// parse 불가 상태는 동시 생성 중일 수 있으므로 안전하게 실패 처리
@@ -941,7 +985,10 @@ func acquireConnectLock() (*connectLock, error) {
 		if err := createLock(); err != nil {
 			if os.IsExist(err) {
 				if existingPID, pidErr := readLockPID(lockPath); pidErr == nil && existingPID > 0 {
-					return nil, fmt.Errorf("이미 실행 중인 bridge 연결 프로세스가 있습니다 (PID: %d)", existingPID)
+					return nil, fmt.Errorf(
+						"이미 실행 중인 bridge 연결 프로세스가 있습니다 (PID: %d). 새 세션으로 교체하려면 --replace를 사용하세요",
+						existingPID,
+					)
 				}
 			}
 			return nil, fmt.Errorf("connect lock 생성 재시도 실패: %w", err)
@@ -952,6 +999,20 @@ func acquireConnectLock() (*connectLock, error) {
 		path: lockPath,
 		pid:  pid,
 	}, nil
+}
+
+func getConnectLockPath(workspaceID string) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("홈 디렉토리 조회 실패: %w", err)
+	}
+
+	name := connectLockFileName
+	if strings.TrimSpace(workspaceID) != "" {
+		name = "connect-" + sanitizeWorkspaceScope(workspaceID) + ".lock"
+	}
+
+	return filepath.Join(home, ".config", "autopus", name), nil
 }
 
 // Release는 현재 프로세스가 소유한 connect.lock을 해제합니다.

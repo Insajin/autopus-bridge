@@ -25,6 +25,7 @@ const (
 
 // loginDeviceCodeOnly 플래그: 하위 호환성을 위해 유지 (Device Code가 유일한 방법이므로 no-op)
 var loginDeviceCodeOnly bool
+var loginReplace bool
 
 // loginCmd handles the login command
 var loginCmd = &cobra.Command{
@@ -50,6 +51,7 @@ func init() {
 	rootCmd.AddCommand(loginCmd)
 	rootCmd.AddCommand(logoutCmd)
 	loginCmd.Flags().BoolVar(&loginDeviceCodeOnly, "device-code", false, "Device Code Flow 사용 (기본값, 하위 호환성)")
+	loginCmd.Flags().BoolVar(&loginReplace, "replace", false, "기존 bridge 연결 프로세스가 있으면 종료 후 새 세션으로 교체")
 }
 
 // runLogin executes the Device Authorization Flow login
@@ -160,7 +162,9 @@ func performDeviceCodeLogin(cmd *cobra.Command) error {
 
 	// 자동 연결 시도
 	fmt.Println("서버에 자동 연결을 시도합니다...")
-	if connectErr := runConnect(cmd, nil); connectErr != nil {
+	if connectErr := runConnectWithOptions(cmd, nil, connectRunOptions{
+		ReplaceExisting: loginReplace,
+	}); connectErr != nil {
 		logger.Warn().Err(connectErr).Msg("자동 연결 실패. 'lab connect'로 수동 연결하세요.")
 	}
 
