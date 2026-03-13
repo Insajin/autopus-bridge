@@ -333,6 +333,16 @@ func runChatWatch(ctx context.Context, client *apiclient.Client, out io.Writer, 
 	}
 }
 
+// chatHistoryResponse는 채널 메시지 API의 중첩 응답 구조입니다.
+// 백엔드가 {data: {messages: [], has_more, first_unread_id}} 형태로 응답하므로
+// DoList[ChatMessage]가 아닌 Do[chatHistoryResponse]로 파싱해야 합니다.
+// REQ-CC-002: message.go의 messageListResponse와 동일한 패턴을 적용합니다.
+type chatHistoryResponse struct {
+	Messages      []ChatMessage `json:"messages"`
+	HasMore       bool          `json:"has_more"`
+	FirstUnreadID *string       `json:"first_unread_id"`
+}
+
 // runChatHistory는 채널의 채팅 기록을 출력합니다.
 func runChatHistory(client *apiclient.Client, out io.Writer, channelID string, limit int, jsonOutput bool) error {
 	path := "/api/v1/channels/" + channelID + "/messages"
@@ -340,11 +350,16 @@ func runChatHistory(client *apiclient.Client, out io.Writer, channelID string, l
 		path += fmt.Sprintf("?limit=%d", limit)
 	}
 
-	messages, err := apiclient.DoList[ChatMessage](client, context.Background(), "GET", path, nil)
+	// REQ-CC-002: 백엔드가 {data:{messages:[], has_more, first_unread_id}} 형태로 응답하므로
+	// DoList[ChatMessage] 대신 Do[chatHistoryResponse]로 파싱한다.
+	// 이전: DoList[ChatMessage] — data를 직접 배열로 파싱하려다 실패
+	// 이후: Do[chatHistoryResponse] — 중첩 구조를 올바르게 파싱
+	resp, err := apiclient.Do[chatHistoryResponse](client, context.Background(), "GET", path, nil)
 	if err != nil {
 		return fmt.Errorf("채팅 기록 조회 실패: %w", err)
 	}
 
+	messages := resp.Messages
 	if jsonOutput {
 		return apiclient.PrintJSON(out, messages)
 	}

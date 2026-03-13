@@ -593,6 +593,94 @@ func TestRunMeetingSchedulesJSON(t *testing.T) {
 	}
 }
 
+// TAG-001 RED: SuccessPage 포맷(백엔드 변경 후) 응답에서 미팅 목록을 파싱하는 테스트.
+// 백엔드가 SuccessPage로 변경되면 {success:true, data:[...], total, limit, offset} 형태로 응답한다.
+// CLI의 DoList[Meeting]은 data 배열만 읽으므로 이 형태에서도 동작해야 한다.
+func TestRunMeetingList_SuccessPageFormat(t *testing.T) {
+	meetings := []Meeting{
+		{ID: "meet-1", Title: "팀 스탠드업", Status: "scheduled", ScheduledAt: "2026-03-10T09:00:00Z"},
+		{ID: "meet-2", Title: "스프린트 리뷰", Status: "ended", ScheduledAt: "2026-03-09T14:00:00Z"},
+	}
+
+	// SuccessPage 포맷 응답 시뮬레이션: data가 배열, total/limit/offset이 최상위 필드
+	buildSuccessPageResponse := func(data interface{}, total int64, limit, offset int) []byte {
+		payload, _ := json.Marshal(data)
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+			"total":   total,
+			"limit":   limit,
+			"offset":  offset,
+		}
+		b, _ := json.Marshal(resp)
+		return b
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/workspaces/ws-1/meetings" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildSuccessPageResponse(meetings, 2, 20, 0))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runMeetingList(client, &buf, "", 0, 0, false)
+	if err != nil {
+		t.Fatalf("runMeetingList SuccessPage 포맷 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "팀 스탠드업") {
+		t.Errorf("출력에 '팀 스탠드업'이 없습니다: %s", out)
+	}
+	if !strings.Contains(out, "스프린트 리뷰") {
+		t.Errorf("출력에 '스프린트 리뷰'가 없습니다: %s", out)
+	}
+}
+
+// TestRunMeetingList_OldWrappedFormat은 현재 백엔드 응답(data가 객체)이 CLI 파싱 실패를 유발함을 검증한다.
+// REQ-CC-001: 현재 형태가 문제임을 재현하는 특성화 테스트
+func TestRunMeetingList_OldWrappedFormat(t *testing.T) {
+	meetings := []Meeting{
+		{ID: "meet-1", Title: "팀 스탠드업"},
+	}
+
+	// 현재 백엔드 형태: data가 객체
+	buildOldResponse := func(data []Meeting, total, page, perPage int) []byte {
+		resp := map[string]interface{}{
+			"success": true,
+			"data": map[string]interface{}{
+				"meetings": data,
+				"total":    total,
+				"page":     page,
+				"per_page": perPage,
+			},
+		}
+		b, _ := json.Marshal(resp)
+		return b
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildOldResponse(meetings, 1, 1, 20))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	// 현재 코드: DoList[Meeting]은 data를 배열로 파싱 시도 → 실패해야 함
+	err := runMeetingList(client, &buf, "", 0, 0, false)
+	if err == nil {
+		t.Error("구형 래핑 포맷에서는 파싱 오류가 발생해야 합니다 (data가 배열이 아닌 객체)")
+	}
+}
+
 // TestRunMeetingListError는 API 에러 경로를 테스트합니다.
 func TestRunMeetingListError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

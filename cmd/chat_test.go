@@ -129,10 +129,19 @@ func TestSendChatMessage(t *testing.T) {
 	}
 }
 
+// TestRunChatHistory는 실제 백엔드 응답 포맷(wrapper struct)으로 채팅 히스토리를 파싱하는 테스트.
+// 백엔드는 {data: {messages:[], has_more, first_unread_id}} 형태로 응답한다.
 func TestRunChatHistory(t *testing.T) {
 	messages := []ChatMessage{
 		{ID: "msg-1", Content: "Hello", Role: "user"},
 		{ID: "msg-2", Content: "Hi there!", Role: "assistant"},
+	}
+
+	// 실제 백엔드와 동일한 형태: data 안에 messages 배열이 중첩된 구조
+	type wrappedResponse struct {
+		Messages      []ChatMessage `json:"messages"`
+		HasMore       bool          `json:"has_more"`
+		FirstUnreadID *string       `json:"first_unread_id"`
 	}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +150,8 @@ func TestRunChatHistory(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		payload, _ := json.Marshal(messages)
+		wrapped := wrappedResponse{Messages: messages, HasMore: false}
+		payload, _ := json.Marshal(wrapped)
 		resp := map[string]interface{}{
 			"success": true,
 			"data":    json.RawMessage(payload),
@@ -162,5 +172,61 @@ func TestRunChatHistory(t *testing.T) {
 	out := buf.String()
 	if !strings.Contains(out, "Hello") {
 		t.Errorf("출력에 'Hello'가 없습니다: %s", out)
+	}
+}
+
+// TAG-002 RED: 실제 백엔드 응답 포맷(wrapper struct)으로 채팅 히스토리를 파싱하는 테스트
+// 백엔드는 {data: {messages:[], has_more, first_unread_id}} 형태로 응답한다.
+// 현재 DoList[ChatMessage]는 data를 직접 배열로 파싱하려 하므로 실패한다.
+// GREEN에서는 Do[chatHistoryResponse]로 변경해야 이 테스트가 통과한다.
+func TestRunChatHistory_WrappedFormat(t *testing.T) {
+	messages := []ChatMessage{
+		{ID: "msg-1", Content: "Hello", Role: "user"},
+		{ID: "msg-2", Content: "Hi there!", Role: "assistant"},
+	}
+
+	// 실제 백엔드 응답 형태: data 안에 messages 배열이 중첩된 구조
+	type wrappedResponse struct {
+		Messages      []ChatMessage `json:"messages"`
+		HasMore       bool          `json:"has_more"`
+		FirstUnreadID *string       `json:"first_unread_id"`
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/messages") {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		// 실제 백엔드와 동일: data가 배열이 아닌 객체
+		wrapped := wrappedResponse{
+			Messages: messages,
+			HasMore:  false,
+		}
+		payload, _ := json.Marshal(wrapped)
+		resp := map[string]interface{}{
+			"success": true,
+			"data":    json.RawMessage(payload),
+		}
+		b, _ := json.Marshal(resp)
+		w.Write(b)
+	}))
+	defer srv.Close()
+
+	client := makeChatTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	// GREEN 단계에서 runChatHistory가 wrapper struct를 사용해야 이 테스트가 통과한다
+	err := runChatHistory(client, &buf, "ch-1", 10, false)
+	if err != nil {
+		t.Fatalf("runChatHistory wrapper 포맷 오류: %v", err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "Hello") {
+		t.Errorf("출력에 'Hello'가 없습니다: %s", out)
+	}
+	if !strings.Contains(out, "Hi there!") {
+		t.Errorf("출력에 'Hi there!'가 없습니다: %s", out)
 	}
 }
