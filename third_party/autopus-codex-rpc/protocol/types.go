@@ -50,10 +50,18 @@ type ClientInfo struct {
 	Version string `json:"version"`
 }
 
+// Capabilities는 클라이언트 능력 정보이다.
+type Capabilities struct {
+	// ExperimentalApi는 실험적 API(dynamicTools 등) 지원 여부이다.
+	ExperimentalApi bool `json:"experimentalApi,omitempty"`
+}
+
 // InitializeParams는 initialize 핸드셰이크 요청 파라미터이다.
 type InitializeParams struct {
 	// ClientInfo는 클라이언트 식별 정보이다.
 	ClientInfo ClientInfo `json:"clientInfo"`
+	// Capabilities는 클라이언트 능력 정보이다.
+	Capabilities Capabilities `json:"capabilities,omitempty"`
 }
 
 // InitializeResult는 initialize 핸드셰이크 응답 결과이다.
@@ -83,6 +91,16 @@ type AccountLoginResult struct {
 	Success bool `json:"success"`
 }
 
+// DynamicToolDefinition은 dynamicTools로 전달되는 커스텀 도구 정의이다.
+type DynamicToolDefinition struct {
+	// Name은 도구 이름이다.
+	Name string `json:"name"`
+	// Description은 도구 설명이다.
+	Description string `json:"description,omitempty"`
+	// InputSchema는 도구 입력 스키마이다 (JSON Schema).
+	InputSchema json.RawMessage `json:"inputSchema,omitempty"`
+}
+
 // ThreadStartParams는 thread/start 요청 파라미터이다.
 type ThreadStartParams struct {
 	// Model은 사용할 모델이다 (예: "o4-mini").
@@ -93,6 +111,8 @@ type ThreadStartParams struct {
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
 	// Sandbox는 샌드박스 모드 활성화 여부이다 (Backend에서 추가).
 	Sandbox bool `json:"sandbox,omitempty"`
+	// DynamicTools는 tool_loop 모드에서 전달되는 커스텀 도구 정의 목록이다.
+	DynamicTools []DynamicToolDefinition `json:"dynamicTools,omitempty"`
 }
 
 // ThreadStartResult는 thread/start 응답 결과이다.
@@ -225,6 +245,34 @@ type ApprovalRequest struct {
 	Command string `json:"command,omitempty"`
 	// FilePath는 변경될 파일 경로이다 (fileChange 타입일 때).
 	FilePath string `json:"filePath,omitempty"`
+}
+
+// DynamicToolCallRequest는 서버가 클라이언트에게 동적 도구 실행을 요청할 때의 파라미터이다.
+type DynamicToolCallRequest struct {
+	// ThreadID는 Thread ID이다.
+	ThreadID string `json:"threadId"`
+	// ItemID는 Item ID이다.
+	ItemID string `json:"itemId"`
+	// Tool은 실행할 도구 이름이다.
+	Tool string `json:"tool"`
+	// Arguments는 도구 실행 인자이다.
+	Arguments json.RawMessage `json:"arguments"`
+}
+
+// ContentItem은 동적 도구 응답의 콘텐츠 항목이다.
+type ContentItem struct {
+	// Type은 콘텐츠 타입이다 (예: "text").
+	Type string `json:"type"`
+	// Text는 텍스트 콘텐츠이다.
+	Text string `json:"text,omitempty"`
+}
+
+// DynamicToolCallResponse는 클라이언트가 동적 도구 실행 결과를 반환할 때의 응답이다.
+type DynamicToolCallResponse struct {
+	// ContentItems는 응답 콘텐츠 항목 목록이다.
+	ContentItems []ContentItem `json:"contentItems,omitempty"`
+	// Success는 도구 실행 성공 여부이다.
+	Success bool `json:"success"`
 }
 
 // ApprovalResponseParams는 승인 응답 파라미터이다.

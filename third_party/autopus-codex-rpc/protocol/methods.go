@@ -39,4 +39,7 @@ const (
 	MethodCommandExecutionApproval = "item/commandExecution/requestApproval"
 	// MethodFileChangeApproval은 파일 변경 승인 요청 알림 메서드이다.
 	MethodFileChangeApproval = "item/fileChange/requestApproval"
+
+	// MethodToolCall은 서버가 클라이언트에게 동적 도구 실행을 요청할 때 사용하는 메서드이다 (서버 -> 클라이언트 요청).
+	MethodToolCall = "item/tool/call"
 )

@@ -249,11 +249,14 @@ func (p *AppServerProcess) initialize(ctx context.Context) error {
 	initCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	// initialize 요청 전송 (공유 프로토콜 타입 사용)
+	// initialize 요청 전송 (experimentalApi 능력 포함)
 	result, err := p.client.Call(initCtx, protocol.MethodInitialize, protocol.InitializeParams{
 		ClientInfo: protocol.ClientInfo{
 			Name:    "autopus-bridge",
 			Version: "1.0.0",
+		},
+		Capabilities: protocol.Capabilities{
+			ExperimentalApi: true,
 		},
 	})
 	if err != nil {
@@ -526,10 +529,23 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		cwd = "."
 	}
 
+	// tool_loop 모드이고 ToolDefinitions가 있을 때 dynamicTools로 변환한다.
+	var dynamicTools []protocol.DynamicToolDefinition
+	if req.ResponseMode == "tool_loop" && len(req.ToolDefinitions) > 0 {
+		for _, td := range req.ToolDefinitions {
+			dynamicTools = append(dynamicTools, protocol.DynamicToolDefinition{
+				Name:        td.Name,
+				Description: td.Description,
+				InputSchema: td.InputSchema,
+			})
+		}
+	}
+
 	threadResult, err := rpcClient.Call(ctx, protocol.MethodThreadStart, protocol.ThreadStartParams{
 		Model:          model,
 		Cwd:            cwd,
 		ApprovalPolicy: approvalPolicy,
+		DynamicTools:   dynamicTools,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("thread/start 실패: %w", err)
@@ -596,7 +612,7 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		}
 	})
 
-	// 아이템 완료 핸들러 (commandExecution, mcpToolCall 등)
+	// 아이템 완료 핸들러 (commandExecution, mcpToolCall, dynamicToolCall 등)
 	rpcClient.OnNotification(protocol.MethodItemCompleted, func(method string, params json.RawMessage) {
 		var item protocol.ItemCompletedParams
 		if err := json.Unmarshal(params, &item); err != nil {
@@ -640,6 +656,59 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 				Input: inputData,
 			})
 			mu.Unlock()
+
+		case "dynamicToolCall":
+			// item/completed 알림으로 수신된 동적 도구 호출 완료 데이터
+			var dtcData struct {
+				Tool      string          `json:"tool"`
+				Arguments json.RawMessage `json:"arguments"`
+			}
+			if err := json.Unmarshal(item.Data, &dtcData); err != nil {
+				p.logger.Warn().Err(err).Msg("동적 도구 호출 완료 데이터 파싱 실패")
+				return
+			}
+			mu.Lock()
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    item.ItemID,
+				Name:  dtcData.Tool,
+				Input: dtcData.Arguments,
+			})
+			mu.Unlock()
+		}
+	})
+
+	// item/tool/call 요청 핸들러 등록 (서버 -> 클라이언트 요청, id 있음)
+	// 서버가 동적 도구 실행을 요청할 때 호출된다.
+	rpcClient.OnRequest(protocol.MethodToolCall, func(id int64, method string, params json.RawMessage) interface{} {
+		var dtcReq protocol.DynamicToolCallRequest
+		if err := json.Unmarshal(params, &dtcReq); err != nil {
+			p.logger.Warn().Err(err).Msg("item/tool/call 요청 파싱 실패")
+			return protocol.DynamicToolCallResponse{
+				Success:      false,
+				ContentItems: []protocol.ContentItem{{Type: "text", Text: "요청 파싱 실패"}},
+			}
+		}
+
+		// 도구 호출 정보를 캡처한다. 실제 실행은 백엔드에서 수행된다.
+		mu.Lock()
+		toolCalls = append(toolCalls, ToolCall{
+			ID:    dtcReq.ItemID,
+			Name:  dtcReq.Tool,
+			Input: dtcReq.Arguments,
+		})
+		mu.Unlock()
+
+		p.logger.Debug().
+			Str("item_id", dtcReq.ItemID).
+			Str("tool", dtcReq.Tool).
+			Msg("동적 도구 호출 캡처 완료")
+
+		// 브릿지는 도구 호출 정보를 캡처하고 플레이스홀더 응답을 반환한다.
+		return protocol.DynamicToolCallResponse{
+			Success: true,
+			ContentItems: []protocol.ContentItem{
+				{Type: "text", Text: "Tool call captured"},
+			},
 		}
 	})
 
@@ -743,11 +812,16 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 	copy(resultToolCalls, toolCalls)
 	mu.Unlock()
 
-	return &ExecuteResponse{
+	resp := &ExecuteResponse{
 		Output:    output,
 		ToolCalls: resultToolCalls,
 		Model:     model,
-	}, nil
+	}
+	// 도구 호출이 있을 때 StopReason을 "tool_use"로 설정한다.
+	if len(resultToolCalls) > 0 {
+		resp.StopReason = "tool_use"
+	}
+	return resp, nil
 }
 
 // Close는 프로바이더를 종료합니다. 프로세스를 중지합니다.

@@ -15,6 +15,10 @@ import (
 // NotificationHandler는 JSON-RPC 알림을 처리하는 핸들러 함수 타입이다.
 type NotificationHandler func(method string, params json.RawMessage)
 
+// RequestHandler는 서버에서 클라이언트로 전송되는 JSON-RPC 요청을 처리하는 핸들러 함수 타입이다.
+// id는 응답 시 사용되는 요청 식별자이며, 반환된 interface{}는 결과로 직렬화된다.
+type RequestHandler func(id int64, method string, params json.RawMessage) interface{}
+
 // Client는 stdio 기반 JSON-RPC 2.0 클라이언트이다.
 // 동시성 안전하게 요청/응답을 관리하며, 알림을 등록된 핸들러로 디스패치한다.
 // 외부 의존성 없이 stdlib만 사용한다.
@@ -27,8 +31,9 @@ type Client struct {
 	pending   map[int64]chan *protocol.JSONRPCResponse
 	pendingMu sync.Mutex
 
-	notifyHandlers map[string]NotificationHandler
-	handlersMu     sync.RWMutex
+	notifyHandlers  map[string]NotificationHandler
+	requestHandlers map[string]RequestHandler
+	handlersMu      sync.RWMutex
 
 	writeMu sync.Mutex
 
@@ -49,14 +54,15 @@ func NewJSONRPCClient(stdin io.WriteCloser, stdout io.Reader, logger Logger) *Cl
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	c := &Client{
-		stdin:          stdin,
-		stdout:         scanner,
-		logger:         logger,
-		pending:        make(map[int64]chan *protocol.JSONRPCResponse),
-		notifyHandlers: make(map[string]NotificationHandler),
-		ctx:            ctx,
-		cancel:         cancel,
-		done:           make(chan struct{}),
+		stdin:           stdin,
+		stdout:          scanner,
+		logger:          logger,
+		pending:         make(map[int64]chan *protocol.JSONRPCResponse),
+		notifyHandlers:  make(map[string]NotificationHandler),
+		requestHandlers: make(map[string]RequestHandler),
+		ctx:             ctx,
+		cancel:          cancel,
+		done:            make(chan struct{}),
 	}
 
 	go c.readLoop()
@@ -171,6 +177,15 @@ func (c *Client) OnNotification(method string, handler NotificationHandler) {
 	c.notifyHandlers[method] = handler
 }
 
+// OnRequest는 서버에서 클라이언트로 전송되는 JSON-RPC 요청 핸들러를 등록한다.
+// 같은 메서드에 핸들러를 중복 등록하면 마지막 핸들러가 사용된다.
+// 핸들러는 결과를 반환하며, 클라이언트는 자동으로 응답을 전송한다.
+func (c *Client) OnRequest(method string, handler RequestHandler) {
+	c.handlersMu.Lock()
+	defer c.handlersMu.Unlock()
+	c.requestHandlers[method] = handler
+}
+
 // Close는 클라이언트를 종료하고 대기 중인 모든 요청을 취소한다.
 // 호출 후 모든 진행 중인 Call은 에러와 함께 반환된다.
 // stdin을 닫아 readLoop에 EOF를 전달한다.
@@ -243,6 +258,9 @@ func (c *Client) readLoop() {
 		} else if raw.Method != "" && raw.ID == nil {
 			// 알림 메시지: method가 있고 id가 없음
 			c.handleNotification(line)
+		} else if raw.Method != "" && raw.ID != nil {
+			// 서버 → 클라이언트 요청 메시지: method가 있고 id도 있음 (item/tool/call 등)
+			c.handleServerRequest(line)
 		}
 	}
 
@@ -289,6 +307,43 @@ func (c *Client) handleResponse(data []byte) {
 	}()
 
 	ch <- &resp
+}
+
+// handleServerRequest는 서버에서 클라이언트로 전송된 JSON-RPC 요청을 파싱하여 등록된 핸들러를 호출하고 응답을 전송한다.
+func (c *Client) handleServerRequest(data []byte) {
+	var req protocol.JSONRPCRequest
+	if err := json.Unmarshal(data, &req); err != nil {
+		c.logger.Warn("서버 요청 파싱 실패", "err", err)
+		return
+	}
+
+	c.handlersMu.RLock()
+	handler, ok := c.requestHandlers[req.Method]
+	c.handlersMu.RUnlock()
+
+	if !ok {
+		c.logger.Debug("등록되지 않은 서버 요청 메서드", "method", req.Method)
+		return
+	}
+
+	// 핸들러 호출하여 결과 획득
+	result := handler(req.ID, req.Method, req.Params)
+
+	// 응답 직렬화 및 전송
+	resultData, err := json.Marshal(result)
+	if err != nil {
+		c.logger.Warn("서버 요청 응답 직렬화 실패", "method", req.Method, "err", err)
+		return
+	}
+	rawResult := json.RawMessage(resultData)
+	resp := protocol.JSONRPCResponse{
+		JSONRPC: "2.0",
+		ID:      &req.ID,
+		Result:  &rawResult,
+	}
+	if err := c.writeJSON(resp); err != nil {
+		c.logger.Warn("서버 요청 응답 전송 실패", "method", req.Method, "err", err)
+	}
 }
 
 // handleNotification은 알림 메시지를 파싱하여 등록된 핸들러를 호출한다.
