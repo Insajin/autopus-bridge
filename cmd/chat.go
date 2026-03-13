@@ -180,8 +180,8 @@ func resolveAgentForChat(client *apiclient.Client, agentRef string) (*DashboardA
 func resolveDMChannel(client *apiclient.Client, agent *DashboardAgent) (*DMChannel, error) {
 	workspaceID := client.WorkspaceID()
 
-	// CEO 에이전트 확인
-	if strings.ToUpper(agent.Name) == "CEO" {
+	// CEO 에이전트 확인 (이름에 "CEO"가 포함되면 CEO로 간주)
+	if strings.Contains(strings.ToUpper(agent.Name), "CEO") {
 		ch, err := apiclient.Do[DMChannel](client, context.Background(), "POST",
 			"/api/v1/workspaces/"+workspaceID+"/dm-channels/ensure-ceo", map[string]string{})
 		if err != nil {
@@ -203,7 +203,14 @@ func resolveDMChannel(client *apiclient.Client, agent *DashboardAgent) (*DMChann
 		}
 	}
 
-	return nil, fmt.Errorf("에이전트 %s의 DM 채널을 찾을 수 없습니다", agent.Name)
+	// DM 채널이 없으면 생성 시도
+	ch, err := apiclient.Do[DMChannel](client, context.Background(), "POST",
+		"/api/v1/workspaces/"+workspaceID+"/dm-channels",
+		map[string]string{"agent_id": agent.ID})
+	if err != nil {
+		return nil, fmt.Errorf("에이전트 %s의 DM 채널 생성 실패: %w", agent.Name, err)
+	}
+	return ch, nil
 }
 
 // sendChatMessage는 채널에 메시지를 전송합니다.
