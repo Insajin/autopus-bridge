@@ -12,6 +12,8 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/anthropics/anthropic-sdk-go/packages/param"
+	ws "github.com/insajin/autopus-agent-protocol"
 )
 
 // Claude 지원 모델 목록
@@ -138,6 +140,10 @@ func (p *ClaudeProvider) Capabilities() ProviderCapabilities {
 
 // Execute는 프롬프트를 실행하고 결과를 반환합니다.
 func (p *ClaudeProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	if req.ResponseMode == "tool_loop" {
+		return p.executeToolLoop(ctx, req)
+	}
+
 	// computer_use 도구가 요청된 경우 Beta API 사용
 	if containsTool(req.Tools, "computer_use") {
 		return p.executeWithBeta(ctx, req)
@@ -260,6 +266,85 @@ func (p *ClaudeProvider) Execute(ctx context.Context, req ExecuteRequest) (*Exec
 		TokenUsage: tokenUsage,
 		DurationMs: durationMs,
 		Model:      string(response.Model),
+		Provider:   p.Name(),
+		StopReason: string(response.StopReason),
+		ToolCalls:  toolCalls,
+	}, nil
+}
+
+func (p *ClaudeProvider) executeToolLoop(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	startTime := time.Now()
+
+	model := req.Model
+	if model == "" {
+		model = p.config.DefaultModel
+	}
+	if !p.Supports(model) {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedModel, model)
+	}
+
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+
+	messages, err := buildClaudeToolLoopMessages(req.ToolLoopMessages)
+	if err != nil {
+		return nil, err
+	}
+	tools, err := buildClaudeTools(req.ToolDefinitions)
+	if err != nil {
+		return nil, err
+	}
+
+	params := anthropic.MessageNewParams{
+		Model:     anthropic.Model(model),
+		MaxTokens: int64(maxTokens),
+		Messages:  messages,
+		Tools:     tools,
+	}
+	if req.SystemPrompt != "" {
+		params.System = []anthropic.TextBlockParam{{Text: req.SystemPrompt}}
+	}
+
+	response, err := p.client.Messages.New(ctx, params)
+	if err != nil {
+		return nil, fmt.Errorf("claude API tool-loop 호출 실패: %w", err)
+	}
+
+	var outputText string
+	var toolCalls []ToolCall
+	for _, block := range response.Content {
+		switch block.Type {
+		case "text":
+			outputText += block.Text
+		case "tool_use":
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    block.ID,
+				Name:  block.Name,
+				Input: json.RawMessage(block.Input),
+			})
+		}
+	}
+
+	tokenUsage := TokenUsage{
+		InputTokens:  int(response.Usage.InputTokens),
+		OutputTokens: int(response.Usage.OutputTokens),
+		TotalTokens:  int(response.Usage.InputTokens + response.Usage.OutputTokens),
+	}
+	if response.Usage.CacheReadInputTokens > 0 {
+		tokenUsage.CacheRead = int(response.Usage.CacheReadInputTokens)
+	}
+	if response.Usage.CacheCreationInputTokens > 0 {
+		tokenUsage.CacheCreation = int(response.Usage.CacheCreationInputTokens)
+	}
+
+	return &ExecuteResponse{
+		Output:     outputText,
+		TokenUsage: tokenUsage,
+		DurationMs: time.Since(startTime).Milliseconds(),
+		Model:      string(response.Model),
+		Provider:   p.Name(),
 		StopReason: string(response.StopReason),
 		ToolCalls:  toolCalls,
 	}, nil
@@ -395,9 +480,85 @@ func (p *ClaudeProvider) executeWithBeta(ctx context.Context, req ExecuteRequest
 		TokenUsage: tokenUsage,
 		DurationMs: durationMs,
 		Model:      string(response.Model),
+		Provider:   p.Name(),
 		StopReason: string(response.StopReason),
 		ToolCalls:  toolCalls,
 	}, nil
+}
+
+func buildClaudeToolLoopMessages(messages []ws.ToolLoopMessage) ([]anthropic.MessageParam, error) {
+	result := make([]anthropic.MessageParam, 0, len(messages))
+	for _, msg := range messages {
+		blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(msg.ToolCalls)+len(msg.ToolResults))
+		if msg.Content != "" {
+			blocks = append(blocks, anthropic.NewTextBlock(msg.Content))
+		}
+		for _, call := range msg.ToolCalls {
+			var input any
+			if len(call.Input) > 0 {
+				if err := json.Unmarshal(call.Input, &input); err != nil {
+					return nil, fmt.Errorf("tool %q input decode failed: %w", call.Name, err)
+				}
+			}
+			blocks = append(blocks, anthropic.NewToolUseBlock(call.ID, input, call.Name))
+		}
+		for _, toolResult := range msg.ToolResults {
+			blocks = append(blocks, anthropic.NewToolResultBlock(toolResult.ToolCallID, toolResult.Content, toolResult.IsError))
+		}
+		if len(blocks) == 0 {
+			continue
+		}
+		if msg.Role == "assistant" {
+			result = append(result, anthropic.NewAssistantMessage(blocks...))
+		} else {
+			result = append(result, anthropic.NewUserMessage(blocks...))
+		}
+	}
+	return result, nil
+}
+
+func buildClaudeTools(defs []ws.ToolDefinition) ([]anthropic.ToolUnionParam, error) {
+	if len(defs) == 0 {
+		return nil, nil
+	}
+	tools := make([]anthropic.ToolUnionParam, 0, len(defs))
+	for _, def := range defs {
+		schema, err := buildClaudeToolInputSchema(def.InputSchema)
+		if err != nil {
+			return nil, fmt.Errorf("tool %q schema build failed: %w", def.Name, err)
+		}
+		tool := anthropic.ToolUnionParamOfTool(schema, def.Name)
+		if def.Description != "" && tool.OfTool != nil {
+			tool.OfTool.Description = param.NewOpt(def.Description)
+		}
+		tools = append(tools, tool)
+	}
+	return tools, nil
+}
+
+func buildClaudeToolInputSchema(raw json.RawMessage) (anthropic.ToolInputSchemaParam, error) {
+	if len(raw) == 0 {
+		return anthropic.ToolInputSchemaParam{}, nil
+	}
+	var schemaMap map[string]interface{}
+	if err := json.Unmarshal(raw, &schemaMap); err != nil {
+		return anthropic.ToolInputSchemaParam{}, fmt.Errorf("failed to unmarshal schema: %w", err)
+	}
+
+	result := anthropic.ToolInputSchemaParam{}
+	if props, ok := schemaMap["properties"]; ok {
+		result.Properties = props
+	}
+	if requiredRaw, ok := schemaMap["required"].([]interface{}); ok {
+		required := make([]string, 0, len(requiredRaw))
+		for _, entry := range requiredRaw {
+			if s, ok := entry.(string); ok {
+				required = append(required, s)
+			}
+		}
+		result.Required = required
+	}
+	return result, nil
 }
 
 // containsTool은 도구 목록에서 특정 도구가 있는지 확인합니다.

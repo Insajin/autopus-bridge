@@ -33,6 +33,9 @@ type MessageHandler interface {
 type TaskExecutor interface {
 	// Execute는 작업을 실행합니다.
 	Execute(ctx context.Context, task ws.TaskRequestPayload) (ws.TaskResultPayload, error)
+	// ExecuteAgentResponse executes the richer agent_response_request path without
+	// down-casting tool-loop metadata into the generic task payload.
+	ExecuteAgentResponse(ctx context.Context, req ws.AgentResponseRequestPayload) (ws.AgentResponseCompletePayload, error)
 }
 
 // BuildExecutor는 빌드 실행을 담당하는 인터페이스입니다 (FR-P3-01).
@@ -417,45 +420,30 @@ func (r *Router) handleAgentResponseRequest(ctx context.Context, msg ws.AgentMes
 		return r.client.SendAgentResponseError(errPayload)
 	}
 
-	// AgentResponseRequestPayload -> TaskRequestPayload로 변환하여 기존 실행기 재사용
-	task := ws.TaskRequestPayload{
-		ExecutionID:    req.ExecutionID,
-		Prompt:         req.Prompt,
-		SystemPrompt:   req.SystemPrompt,
-		Provider:       req.Provider,
-		Model:          req.Model,
-		MaxTokens:      req.MaxTokens,
-		Tools:          req.Tools,
-		Timeout:        req.Timeout, // agent_response_request의 "timeout"을 TaskRequestPayload의 "timeout_seconds"에 매핑
-		WorkDir:        req.WorkDir,
-		ApprovalPolicy: req.ApprovalPolicy,
-		ExecutionMode:  req.ExecutionMode,
-	}
-
 	// 비동기로 작업 실행 (응답은 agent_response_* 메시지 타입 사용)
 	log.Printf("[agent-response] 비동기 실행 시작: execution_id=%s", req.ExecutionID)
-	go r.executeAgentResponse(ctx, task)
+	go r.executeAgentResponse(ctx, req)
 
 	return nil
 }
 
 // executeAgentResponse는 에이전트 응답 요청을 실행하고 결과를 전송합니다 (SPEC-BRIDGE-GATEWAY-001).
 // executeTask와 동일한 실행 흐름이나 agent_response_* 메시지 타입으로 응답한다.
-func (r *Router) executeAgentResponse(ctx context.Context, task ws.TaskRequestPayload) {
-	defer r.client.TaskTracker().Complete(task.ExecutionID)
-	log.Printf("[agent-response] 실행 시작: execution_id=%s model=%s", task.ExecutionID, task.Model)
+func (r *Router) executeAgentResponse(ctx context.Context, req ws.AgentResponseRequestPayload) {
+	defer r.client.TaskTracker().Complete(req.ExecutionID)
+	log.Printf("[agent-response] 실행 시작: execution_id=%s model=%s mode=%s", req.ExecutionID, req.Model, req.ResponseMode)
 
 	// 작업 실행
-	result, err := r.executor.Execute(ctx, task)
+	result, err := r.executor.ExecuteAgentResponse(ctx, req)
 	if err != nil {
-		log.Printf("[agent-response] 실행 에러: execution_id=%s err=%v", task.ExecutionID, err)
+		log.Printf("[agent-response] 실행 에러: execution_id=%s err=%v", req.ExecutionID, err)
 		code := "EXECUTION_ERROR"
 		type codeError interface{ ErrorCode() string }
 		if ce, ok := err.(codeError); ok {
 			code = ce.ErrorCode()
 		}
 		errPayload := ws.AgentResponseErrorPayload{
-			ExecutionID: task.ExecutionID,
+			ExecutionID: req.ExecutionID,
 			Code:        code,
 			Message:     err.Error(),
 			Retryable:   isRetryableError(err),
@@ -465,15 +453,8 @@ func (r *Router) executeAgentResponse(ctx context.Context, task ws.TaskRequestPa
 	}
 
 	// 완료 응답 전송
-	log.Printf("[agent-response] 실행 완료: execution_id=%s duration=%dms", task.ExecutionID, result.Duration)
-	completePayload := ws.AgentResponseCompletePayload{
-		ExecutionID: task.ExecutionID,
-		Output:      result.Output,
-		ExitCode:    result.ExitCode,
-		Duration:    result.Duration,
-		TokenUsage:  result.TokenUsage,
-	}
-	_ = r.client.SendAgentResponseComplete(completePayload)
+	log.Printf("[agent-response] 실행 완료: execution_id=%s duration=%dms stop_reason=%s tool_calls=%d", req.ExecutionID, result.Duration, result.StopReason, len(result.ToolCalls))
+	_ = r.client.sendMessage(ws.AgentMsgAgentResponseComplete, result)
 }
 
 // retryable은 재시도 가능 여부를 노출하는 에러 인터페이스입니다.

@@ -5,8 +5,10 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -174,6 +176,114 @@ func TestUpdateProviderCapabilities_Reconnect_LatestCaps(t *testing.T) {
 	if !caps["claude"] || !caps["gemini"] {
 		t.Errorf("capabilities가 업데이트되어야 하나 %v입니다", caps)
 	}
+}
+
+func TestConnect_SendsProtocolVersion(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("리스너 생성 실패: %v", err)
+	}
+	defer listener.Close()
+
+	received := make(chan ws.AgentConnectPayload, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		_, raw, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		var msg ws.AgentMessage
+		if err := json.Unmarshal(raw, &msg); err != nil {
+			return
+		}
+		var payload ws.AgentConnectPayload
+		if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+			return
+		}
+		received <- payload
+
+		ackPayload, _ := json.Marshal(ws.ConnectAckPayload{
+			Success:         true,
+			Message:         "ok",
+			ProtocolVersion: ws.AgentProtocolVersion,
+		})
+		ackMsg, _ := json.Marshal(ws.AgentMessage{Type: ws.AgentMsgConnectAck, Payload: ackPayload})
+		_ = conn.WriteMessage(websocket.TextMessage, ackMsg)
+	})}
+	go func() { _ = srv.Serve(listener) }()
+	defer srv.Close()
+
+	client := NewClient("ws://"+listener.Addr().String()+"/ws", "test-token", "1.0.0")
+	defer client.Disconnect("test")
+
+	if err := client.Connect(testContext(t)); err != nil {
+		t.Fatalf("Connect 실패: %v", err)
+	}
+
+	select {
+	case payload := <-received:
+		if payload.ProtocolVersion != ws.AgentProtocolVersion {
+			t.Fatalf("ProtocolVersion = %q, want %q", payload.ProtocolVersion, ws.AgentProtocolVersion)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent_connect payload not received")
+	}
+}
+
+func TestConnect_RejectsProtocolVersionMismatchAck(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("리스너 생성 실패: %v", err)
+	}
+	defer listener.Close()
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+
+		if _, _, err := conn.ReadMessage(); err != nil {
+			return
+		}
+
+		ackPayload, _ := json.Marshal(ws.ConnectAckPayload{
+			Success:         false,
+			Message:         fmt.Sprintf("protocol version mismatch: bridge=%s server=%s", ws.AgentProtocolVersion, "9.9.0"),
+			ErrorCode:       ws.AuthErrorProtocolVersionMismatch,
+			ProtocolVersion: "9.9.0",
+		})
+		ackMsg, _ := json.Marshal(ws.AgentMessage{Type: ws.AgentMsgConnectAck, Payload: ackPayload})
+		_ = conn.WriteMessage(websocket.TextMessage, ackMsg)
+	})}
+	go func() { _ = srv.Serve(listener) }()
+	defer srv.Close()
+
+	client := NewClient("ws://"+listener.Addr().String()+"/ws", "test-token", "1.0.0")
+	err = client.Connect(testContext(t))
+	if err == nil {
+		t.Fatal("expected protocol mismatch error")
+	}
+	if got := err.Error(); got == "" || !containsAll(got, []string{"protocol version mismatch"}) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func containsAll(s string, want []string) bool {
+	for _, item := range want {
+		if !strings.Contains(s, item) {
+			return false
+		}
+	}
+	return true
 }
 
 // TestConcurrency_NoRace는 동시 접근에서 race condition이 없는지 검증합니다.

@@ -403,6 +403,95 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 	return result, nil
 }
 
+// ExecuteAgentResponse executes the richer agent_response_request path.
+// It preserves native tool-loop metadata instead of coercing it into task_request.
+func (e *TaskExecutor) ExecuteAgentResponse(ctx context.Context, req ws.AgentResponseRequestPayload) (ws.AgentResponseCompletePayload, error) {
+	timeout := time.Duration(req.Timeout) * time.Second
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+
+	execCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	rt := &runningTask{
+		executionID: req.ExecutionID,
+		startTime:   time.Now(),
+		cancel:      cancel,
+	}
+	e.currentTask.Store(rt)
+	defer e.currentTask.Store((*runningTask)(nil))
+
+	if e.sandbox != nil {
+		if err := e.sandbox.ValidateWorkDir(req.WorkDir); err != nil {
+			return ws.AgentResponseCompletePayload{}, &TaskError{
+				Code:      ErrorCodeSandboxViolationTask,
+				Message:   fmt.Sprintf("작업 디렉토리 접근 거부: %v", err),
+				Retryable: false,
+			}
+		}
+	}
+
+	resolution, err := e.registry.ResolveForTask(req.Provider, req.Model)
+	if err != nil {
+		return ws.AgentResponseCompletePayload{}, &TaskError{
+			Code:    ErrorCodeProviderNotFound,
+			Message: fmt.Sprintf("모델 '%s'에 대한 프로바이더를 찾을 수 없습니다: %v", req.Model, err),
+		}
+	}
+
+	prov := resolution.Provider
+	execModel := resolution.Model
+
+	if req.ApprovalPolicy != "" && req.ApprovalPolicy != string(approval.ApprovalPolicyAutoExecute) {
+		if relay, ok := prov.(approval.ApprovalRelay); ok && relay.SupportsApproval() {
+			policy := approval.ApprovalPolicy(req.ApprovalPolicy)
+			router := approval.NewApprovalRouter(policy, timeout)
+			relay.SetApprovalHandler(router.HandleApproval)
+		}
+	}
+
+	providerReq := provider.ExecuteRequest{
+		Prompt:           req.Prompt,
+		SystemPrompt:     req.SystemPrompt,
+		Model:            execModel,
+		MaxTokens:        req.MaxTokens,
+		Tools:            req.Tools,
+		WorkDir:          req.WorkDir,
+		ResponseMode:     req.ResponseMode,
+		ToolLoopMessages: req.ToolLoopMessages,
+		ToolDefinitions:  req.ToolDefinitions,
+	}
+
+	resp, err := prov.Execute(execCtx, providerReq)
+	if err != nil {
+		return ws.AgentResponseCompletePayload{}, e.classifyError(execCtx, err, req.ExecutionID)
+	}
+
+	providerName := resp.Provider
+	if providerName == "" {
+		providerName = prov.Name()
+	}
+
+	return ws.AgentResponseCompletePayload{
+		ExecutionID: req.ExecutionID,
+		Output:      resp.Output,
+		ExitCode:    0,
+		Duration:    resp.DurationMs,
+		TokenUsage: &ws.TokenUsage{
+			InputTokens:   resp.TokenUsage.InputTokens,
+			OutputTokens:  resp.TokenUsage.OutputTokens,
+			TotalTokens:   resp.TokenUsage.TotalTokens,
+			CacheRead:     resp.TokenUsage.CacheRead,
+			CacheCreation: resp.TokenUsage.CacheCreation,
+		},
+		Model:      resp.Model,
+		Provider:   providerName,
+		StopReason: resp.StopReason,
+		ToolCalls:  convertToolCalls(resp.ToolCalls),
+	}, nil
+}
+
 // executeTask는 큐에서 가져온 작업을 실행하고 결과를 전송합니다.
 func (e *TaskExecutor) executeTask(ctx context.Context, task ws.TaskRequestPayload) {
 	// 시작 진행 상황 전송
@@ -450,6 +539,21 @@ func (e *TaskExecutor) executeTask(ctx context.Context, task ws.TaskRequestPaylo
 			Err(sendErr).
 			Msg("결과 전송 실패")
 	}
+}
+
+func convertToolCalls(calls []provider.ToolCall) []ws.ToolLoopCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	result := make([]ws.ToolLoopCall, 0, len(calls))
+	for _, call := range calls {
+		result = append(result, ws.ToolLoopCall{
+			ID:    call.ID,
+			Name:  call.Name,
+			Input: call.Input,
+		})
+	}
+	return result
 }
 
 // reportProgress는 주기적으로 진행 상황을 보고합니다.

@@ -12,19 +12,26 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	ws "github.com/insajin/autopus-agent-protocol"
 )
 
 // openAIChatRequest는 OpenAI Chat Completions API 요청 구조입니다.
 type openAIChatRequest struct {
-	Model     string              `json:"model"`
-	Messages  []openAIChatMessage `json:"messages"`
-	MaxTokens int                 `json:"max_tokens,omitempty"`
+	Model      string              `json:"model"`
+	Messages   []openAIChatMessage `json:"messages"`
+	MaxTokens  int                 `json:"max_tokens,omitempty"`
+	Tools      []openAIChatTool    `json:"tools,omitempty"`
+	ToolChoice string              `json:"tool_choice,omitempty"`
 }
 
 // openAIChatMessage는 OpenAI 메시지 구조입니다.
 type openAIChatMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string               `json:"role"`
+	Content    any                  `json:"content,omitempty"`
+	ToolCalls  []openAIChatToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string               `json:"tool_call_id,omitempty"`
+	Name       string               `json:"name,omitempty"`
 }
 
 // openAIChatResponse는 OpenAI Chat Completions API 응답 구조입니다.
@@ -57,6 +64,28 @@ type openAIErrorResponse struct {
 	Message string `json:"message"`
 	Type    string `json:"type"`
 	Code    string `json:"code"`
+}
+
+type openAIChatTool struct {
+	Type     string                `json:"type"`
+	Function openAIChatFunctionDef `json:"function"`
+}
+
+type openAIChatFunctionDef struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
+}
+
+type openAIChatToolCall struct {
+	ID       string                 `json:"id"`
+	Type     string                 `json:"type"`
+	Function openAIChatFunctionCall `json:"function"`
+}
+
+type openAIChatFunctionCall struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
 }
 
 // CodexProvider는 OpenAI Codex API 프로바이더입니다.
@@ -146,6 +175,10 @@ func (p *CodexProvider) Supports(model string) bool {
 
 // Execute는 프롬프트를 실행하고 결과를 반환합니다.
 func (p *CodexProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	if req.ResponseMode == "tool_loop" {
+		return p.executeToolLoop(ctx, req)
+	}
+
 	startTime := time.Now()
 
 	// 모델 결정 (OpenRouter 접두사 제거)
@@ -232,7 +265,7 @@ func (p *CodexProvider) Execute(ctx context.Context, req ExecuteRequest) (*Execu
 	// 응답 텍스트 추출
 	var outputText string
 	if len(chatResp.Choices) > 0 {
-		outputText = chatResp.Choices[0].Message.Content
+		outputText = messageContentString(chatResp.Choices[0].Message.Content)
 	}
 
 	// 토큰 사용량
@@ -253,7 +286,69 @@ func (p *CodexProvider) Execute(ctx context.Context, req ExecuteRequest) (*Execu
 		TokenUsage: tokenUsage,
 		DurationMs: durationMs,
 		Model:      chatResp.Model,
+		Provider:   p.Name(),
 		StopReason: stopReason,
+	}, nil
+}
+
+func (p *CodexProvider) executeToolLoop(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	startTime := time.Now()
+
+	model := StripProviderPrefix(req.Model)
+	if model == "" {
+		model = p.config.DefaultModel
+	}
+	if !p.Supports(model) {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedModel, model)
+	}
+
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+
+	chatReq := openAIChatRequest{
+		Model:      model,
+		Messages:   buildOpenAIToolLoopMessages(req),
+		MaxTokens:  maxTokens,
+		Tools:      buildOpenAITools(req.ToolDefinitions),
+		ToolChoice: "auto",
+	}
+
+	chatResp, err := p.doRequest(ctx, chatReq)
+	if err != nil {
+		return nil, err
+	}
+
+	outputText := ""
+	toolCalls := make([]ToolCall, 0)
+	stopReason := ""
+	if len(chatResp.Choices) > 0 {
+		outputText = messageContentString(chatResp.Choices[0].Message.Content)
+		stopReason = mapCodexFinishReason(chatResp)
+		for _, call := range chatResp.Choices[0].Message.ToolCalls {
+			toolCalls = append(toolCalls, ToolCall{
+				ID:    call.ID,
+				Name:  call.Function.Name,
+				Input: json.RawMessage(call.Function.Arguments),
+			})
+		}
+	}
+
+	tokenUsage := TokenUsage{
+		InputTokens:  chatResp.Usage.PromptTokens,
+		OutputTokens: chatResp.Usage.CompletionTokens,
+		TotalTokens:  chatResp.Usage.TotalTokens,
+	}
+
+	return &ExecuteResponse{
+		Output:     outputText,
+		TokenUsage: tokenUsage,
+		DurationMs: time.Since(startTime).Milliseconds(),
+		Model:      chatResp.Model,
+		Provider:   p.Name(),
+		StopReason: stopReason,
+		ToolCalls:  toolCalls,
 	}, nil
 }
 
@@ -305,6 +400,82 @@ func (p *CodexProvider) doRequest(ctx context.Context, chatReq openAIChatRequest
 	}
 
 	return &chatResp, nil
+}
+
+func buildOpenAIToolLoopMessages(req ExecuteRequest) []openAIChatMessage {
+	messages := make([]openAIChatMessage, 0, len(req.ToolLoopMessages)+1)
+	if req.SystemPrompt != "" {
+		messages = append(messages, openAIChatMessage{
+			Role:    "system",
+			Content: req.SystemPrompt,
+		})
+	}
+
+	for _, msg := range req.ToolLoopMessages {
+		switch msg.Role {
+		case "tool":
+			for _, result := range msg.ToolResults {
+				messages = append(messages, openAIChatMessage{
+					Role:       "tool",
+					ToolCallID: result.ToolCallID,
+					Name:       result.ToolName,
+					Content:    result.Content,
+				})
+			}
+		default:
+			toolCalls := make([]openAIChatToolCall, 0, len(msg.ToolCalls))
+			for _, call := range msg.ToolCalls {
+				toolCalls = append(toolCalls, openAIChatToolCall{
+					ID:   call.ID,
+					Type: "function",
+					Function: openAIChatFunctionCall{
+						Name:      call.Name,
+						Arguments: string(call.Input),
+					},
+				})
+			}
+			messages = append(messages, openAIChatMessage{
+				Role:      msg.Role,
+				Content:   msg.Content,
+				ToolCalls: toolCalls,
+			})
+		}
+	}
+
+	return messages
+}
+
+func buildOpenAITools(defs []ws.ToolDefinition) []openAIChatTool {
+	if len(defs) == 0 {
+		return nil
+	}
+	tools := make([]openAIChatTool, 0, len(defs))
+	for _, def := range defs {
+		tools = append(tools, openAIChatTool{
+			Type: "function",
+			Function: openAIChatFunctionDef{
+				Name:        def.Name,
+				Description: def.Description,
+				Parameters:  def.InputSchema,
+			},
+		})
+	}
+	return tools
+}
+
+func messageContentString(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case nil:
+		return ""
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return ""
+		}
+		return string(data)
+	}
 }
 
 // mapCodexFinishReason은 OpenAI의 finish_reason을 내부 stop reason으로 매핑합니다.

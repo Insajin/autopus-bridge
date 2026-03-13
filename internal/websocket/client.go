@@ -435,6 +435,8 @@ func (c *Client) waitForAuthAck() error {
 			return ErrAuthExpired
 		case ws.AuthErrorTokenInvalid:
 			return ErrAuthInvalid
+		case ws.AuthErrorProtocolVersionMismatch:
+			return fmt.Errorf("protocol version mismatch: %s", ackPayload.Message)
 		default:
 			// 이전 서버 호환: ErrorCode가 없으면 문자열 매칭 폴백
 			if isAuthError(fmt.Errorf("%s", ackPayload.Message)) {
@@ -449,6 +451,9 @@ func (c *Client) waitForAuthAck() error {
 		if err := c.signer.SetSecretFromHex(ackPayload.HMACSecret); err != nil {
 			return fmt.Errorf("HMAC 시크릿 설정 실패: %w", err)
 		}
+	}
+	if ackPayload.ProtocolVersion != "" && !ws.IsCompatibleProtocolVersion(ackPayload.ProtocolVersion) {
+		return fmt.Errorf("server protocol version mismatch: server=%s client=%s", ackPayload.ProtocolVersion, ws.AgentProtocolVersion)
 	}
 
 	return nil
@@ -476,6 +481,7 @@ func (c *Client) sendConnect() error {
 	}{
 		AgentConnectPayload: ws.AgentConnectPayload{
 			Version:              c.version,
+			ProtocolVersion:      ws.AgentProtocolVersion,
 			Capabilities:         c.capabilities,
 			ProviderCapabilities: providerCaps,
 			LastExecID:           lastExecID,

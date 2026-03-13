@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	ws "github.com/insajin/autopus-agent-protocol"
 )
 
 // 프로바이더 관련 에러 정의
@@ -26,6 +28,9 @@ var (
 
 	// ErrContextCanceled는 컨텍스트가 취소되었을 때 반환됩니다.
 	ErrContextCanceled = errors.New("요청이 취소되었습니다")
+
+	// ErrToolLoopUnsupported는 프로바이더가 native business tool loop를 지원하지 않을 때 반환됩니다.
+	ErrToolLoopUnsupported = errors.New("business tool loop is not supported by this provider")
 )
 
 // Provider는 AI 프로바이더 인터페이스입니다.
@@ -65,6 +70,15 @@ type ExecuteRequest struct {
 
 	// SystemPrompt는 시스템 프롬프트입니다 (선택적).
 	SystemPrompt string
+
+	// ResponseMode는 실행 모드입니다. "tool_loop"면 native business tool-calling 단일 턴입니다.
+	ResponseMode string
+
+	// ToolLoopMessages는 tool_loop 모드에서 전달되는 대화 이력입니다.
+	ToolLoopMessages []ws.ToolLoopMessage
+
+	// ToolDefinitions는 tool_loop 모드에서 노출할 business tool schema입니다.
+	ToolDefinitions []ws.ToolDefinition
 }
 
 // ExecuteResponse는 AI 프로바이더 실행 결과입니다.
@@ -80,6 +94,9 @@ type ExecuteResponse struct {
 
 	// Model은 실제 사용된 모델명입니다.
 	Model string
+
+	// Provider는 실제 사용된 프로바이더명입니다.
+	Provider string
 
 	// StopReason은 응답 종료 사유입니다.
 	// 예: "end_turn", "max_tokens", "stop_sequence", "tool_use"
