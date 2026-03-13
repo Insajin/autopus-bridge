@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	ws "github.com/insajin/autopus-agent-protocol"
 	"github.com/insajin/autopus-codex-rpc/client"
 	"github.com/insajin/autopus-codex-rpc/protocol"
 	"github.com/rs/zerolog"
@@ -1028,6 +1029,366 @@ func TestCodexAppServerProvider_Close(t *testing.T) {
 	if prov.process.IsRunning() {
 		t.Error("Close 후 IsRunning()이 여전히 true입니다")
 	}
+}
+
+// TestCodexAppServerProvider_CollabToolCall은
+// collabToolCall item/completed 알림이 ToolCall로 변환되는지 검증합니다.
+func TestCodexAppServerProvider_CollabToolCall(t *testing.T) {
+	mock := newMockAppServer()
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
+
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		remaining := make([]byte, 0, 4096)
+
+		// thread/start 응답
+		req, err := mock.readRequest(&remaining)
+		if err != nil {
+			return
+		}
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-collab"}); err != nil {
+			return
+		}
+
+		// turn/start 응답
+		req, err = mock.readRequest(&remaining)
+		if err != nil {
+			return
+		}
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-collab"}); err != nil {
+			return
+		}
+
+		// collabToolCall 완료 알림
+		collabData, _ := json.Marshal(map[string]interface{}{
+			"tool":      "search_web",
+			"arguments": map[string]string{"query": "golang"},
+		})
+		if err := mock.sendNotification(protocol.MethodItemCompleted, protocol.ItemCompletedParams{
+			ThreadID: "thread-collab",
+			ItemID:   "collab-001",
+			ItemType: "collabToolCall",
+			Data:     collabData,
+		}); err != nil {
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Turn 완료
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-collab"}); err != nil {
+			return
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := prov.Execute(ctx, ExecuteRequest{
+		Prompt: "collabToolCall 테스트",
+		Model:  "gpt-5-codex",
+	})
+
+	mock.close()
+	<-serverDone
+	c.Close()
+
+	if err != nil {
+		t.Fatalf("Execute 실패: %v", err)
+	}
+
+	// ToolCall이 하나 생성되어야 함
+	if len(resp.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls 개수: got %d, want 1", len(resp.ToolCalls))
+	}
+
+	tc := resp.ToolCalls[0]
+	if tc.ID != "collab-001" {
+		t.Errorf("ToolCall ID: got %q, want %q", tc.ID, "collab-001")
+	}
+	if tc.Name != "search_web" {
+		t.Errorf("ToolCall Name: got %q, want %q", tc.Name, "search_web")
+	}
+}
+
+// TestCodexAppServerProvider_UnknownItemType은
+// 알 수 없는 item 타입 수신 시 패닉 없이 경고만 로깅하는지 검증합니다.
+func TestCodexAppServerProvider_UnknownItemType(t *testing.T) {
+	mock := newMockAppServer()
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
+
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		remaining := make([]byte, 0, 4096)
+
+		// thread/start 응답
+		req, err := mock.readRequest(&remaining)
+		if err != nil {
+			return
+		}
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-unknown"}); err != nil {
+			return
+		}
+
+		// turn/start 응답
+		req, err = mock.readRequest(&remaining)
+		if err != nil {
+			return
+		}
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-unknown"}); err != nil {
+			return
+		}
+
+		// 미래 타입 알림 (알 수 없는 타입)
+		if err := mock.sendNotification(protocol.MethodItemCompleted, protocol.ItemCompletedParams{
+			ThreadID: "thread-unknown",
+			ItemID:   "unknown-001",
+			ItemType: "futureType",
+			Data:     json.RawMessage(`{}`),
+		}); err != nil {
+			return
+		}
+
+		// 에이전트 메시지 (미래 타입 무시 후 계속 동작 확인)
+		if err := mock.sendNotification(protocol.MethodAgentMessageDelta, protocol.AgentMessageDelta{Delta: "OK"}); err != nil {
+			return
+		}
+
+		time.Sleep(50 * time.Millisecond)
+
+		// Turn 완료
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-unknown"}); err != nil {
+			return
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 패닉 없이 정상 완료되어야 함
+	resp, err := prov.Execute(ctx, ExecuteRequest{
+		Prompt: "미래 타입 무시 테스트",
+		Model:  "gpt-5-codex",
+	})
+
+	mock.close()
+	<-serverDone
+	c.Close()
+
+	if err != nil {
+		t.Fatalf("Execute 실패 (미래 타입 수신 후): %v", err)
+	}
+
+	// 알 수 없는 타입은 ToolCall로 변환되지 않아야 함
+	if len(resp.ToolCalls) != 0 {
+		t.Errorf("ToolCalls 개수: got %d, want 0 (미래 타입 무시)", len(resp.ToolCalls))
+	}
+
+	// 에이전트 메시지는 정상적으로 수신되어야 함
+	if resp.Output != "OK" {
+		t.Errorf("Output: got %q, want %q", resp.Output, "OK")
+	}
+}
+
+// TestCodexAppServerProvider_Steer은
+// Steer() 메서드가 turn/steer JSON-RPC 요청을 올바른 파라미터로 전송하는지 검증합니다.
+func TestCodexAppServerProvider_Steer(t *testing.T) {
+	mock := newMockAppServer()
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
+
+	steerCh := make(chan protocol.TurnSteerParams, 1)
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		remaining := make([]byte, 0, 4096)
+
+		// turn/steer 요청 수신
+		req, err := mock.readRequest(&remaining)
+		if err != nil {
+			return
+		}
+
+		if req.Method != protocol.MethodTurnSteer {
+			t.Errorf("예상 메서드 %q, 실제 %q", protocol.MethodTurnSteer, req.Method)
+			return
+		}
+
+		var params protocol.TurnSteerParams
+		if err := json.Unmarshal(req.Params, &params); err != nil {
+			t.Errorf("TurnSteerParams 파싱 실패: %v", err)
+			return
+		}
+		steerCh <- params
+
+		// 응답 전송
+		if err := mock.sendResponse(req.ID, struct{}{}); err != nil {
+			return
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	input := json.RawMessage(`"다음 단계로 이동하세요"`)
+	err := prov.Steer(ctx, "thread-steer-001", input)
+	if err != nil {
+		t.Fatalf("Steer 실패: %v", err)
+	}
+
+	// 파라미터 검증
+	select {
+	case params := <-steerCh:
+		if params.ThreadID != "thread-steer-001" {
+			t.Errorf("ThreadID: got %q, want %q", params.ThreadID, "thread-steer-001")
+		}
+		if string(params.Input) != string(input) {
+			t.Errorf("Input: got %s, want %s", params.Input, input)
+		}
+	case <-time.After(3 * time.Second):
+		t.Error("turn/steer 요청 수신 타임아웃")
+	}
+
+	mock.close()
+	<-serverDone
+	c.Close()
+}
+
+// TestCodexAppServerProvider_TimeoutResolution은
+// 타임아웃 해석 함수의 클램핑 동작을 검증합니다.
+func TestCodexAppServerProvider_TimeoutResolution(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout int
+		want    time.Duration
+	}{
+		{
+			name:    "0이면 기본값 120초",
+			timeout: 0,
+			want:    120 * time.Second,
+		},
+		{
+			name:    "300이면 300초 그대로",
+			timeout: 300,
+			want:    300 * time.Second,
+		},
+		{
+			name:    "10초 이하는 30초로 클램핑",
+			timeout: 10,
+			want:    30 * time.Second,
+		},
+		{
+			name:    "1000초 이상은 600초로 클램핑",
+			timeout: 1000,
+			want:    600 * time.Second,
+		},
+		{
+			name:    "음수는 기본값 120초",
+			timeout: -1,
+			want:    120 * time.Second,
+		},
+		{
+			name:    "30초 경계값 그대로",
+			timeout: 30,
+			want:    30 * time.Second,
+		},
+		{
+			name:    "600초 경계값 그대로",
+			timeout: 600,
+			want:    600 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := resolveExecuteTimeout(tt.timeout)
+			if got != tt.want {
+				t.Errorf("resolveExecuteTimeout(%d): got %v, want %v", tt.timeout, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCodexAppServerProvider_DynamicToolsNativeRegistration은
+// tool_loop 모드에서 dynamicTools가 ThreadStartParams에 포함되는지 검증합니다.
+func TestCodexAppServerProvider_DynamicToolsNativeRegistration(t *testing.T) {
+	mock := newMockAppServer()
+	c := mock.createClient()
+	prov := createMockProvider(c, "auto-approve")
+
+	threadParamsCh := make(chan protocol.ThreadStartParams, 1)
+	serverDone := make(chan struct{})
+	go func() {
+		defer close(serverDone)
+		remaining := make([]byte, 0, 4096)
+
+		// thread/start 요청에서 파라미터 확인
+		req, err := mock.readRequest(&remaining)
+		if err != nil {
+			return
+		}
+		var params protocol.ThreadStartParams
+		if err := json.Unmarshal(req.Params, &params); err == nil {
+			threadParamsCh <- params
+		}
+		if err := mock.sendResponse(req.ID, protocol.ThreadStartResult{ThreadID: "thread-dyn"}); err != nil {
+			return
+		}
+
+		// turn/start 응답
+		req, err = mock.readRequest(&remaining)
+		if err != nil {
+			return
+		}
+		if err := mock.sendResponse(req.ID, protocol.TurnStartResult{TurnID: "turn-dyn"}); err != nil {
+			return
+		}
+
+		// Turn 완료
+		if err := mock.sendNotification(protocol.MethodTurnCompleted, protocol.TurnCompletedParams{ThreadID: "thread-dyn"}); err != nil {
+			return
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	toolDefs := []ws.ToolDefinition{
+		{
+			Name:        "search_web",
+			Description: "웹 검색 도구",
+		},
+	}
+
+	_, err := prov.Execute(ctx, ExecuteRequest{
+		Prompt:          "dynamicTools 테스트",
+		Model:           "gpt-5-codex",
+		ResponseMode:    "tool_loop",
+		ToolDefinitions: toolDefs,
+	})
+
+	// 파라미터 확인
+	select {
+	case params := <-threadParamsCh:
+		if len(params.DynamicTools) != 1 {
+			t.Errorf("DynamicTools 개수: got %d, want 1", len(params.DynamicTools))
+		} else if params.DynamicTools[0].Name != "search_web" {
+			t.Errorf("DynamicTools[0].Name: got %q, want %q", params.DynamicTools[0].Name, "search_web")
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("thread/start 파라미터 수신 타임아웃")
+	}
+
+	mock.close()
+	<-serverDone
+	c.Close()
+
+	// tool_loop 타임아웃 에러는 허용 (180초 타임아웃 내에서 정상 완료)
+	_ = err
 }
 
 // Unused import 방지용 (lint 경고 방지)

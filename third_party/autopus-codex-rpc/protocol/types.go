@@ -54,6 +54,9 @@ type ClientInfo struct {
 type Capabilities struct {
 	// ExperimentalApi는 실험적 API(dynamicTools 등) 지원 여부이다.
 	ExperimentalApi bool `json:"experimentalApi,omitempty"`
+	// OptOutNotificationMethods는 수신 거부할 서버 알림 메서드 목록이다.
+	// 예: ["turn/plan/updated", "turn/diff/updated"]
+	OptOutNotificationMethods []string `json:"optOutNotificationMethods,omitempty"`
 }
 
 // InitializeParams는 initialize 핸드셰이크 요청 파라미터이다.
@@ -102,16 +105,24 @@ type DynamicToolDefinition struct {
 }
 
 // ThreadStartParams는 thread/start 요청 파라미터이다.
+// Codex App Server v2 스키마에 맞춰 정의한다.
 type ThreadStartParams struct {
-	// Model은 사용할 모델이다 (예: "o4-mini").
-	Model string `json:"model"`
+	// Model은 사용할 모델이다 (예: "gpt-5.4").
+	Model string `json:"model,omitempty"`
 	// Cwd는 작업 디렉토리이다.
 	Cwd string `json:"cwd,omitempty"`
-	// ApprovalPolicy는 승인 정책이다 ("auto-approve", "deny-all").
+	// ApprovalPolicy는 승인 정책이다 ("never", "on-failure", "on-request", "untrusted").
 	ApprovalPolicy string `json:"approvalPolicy,omitempty"`
-	// Sandbox는 샌드박스 모드 활성화 여부이다 (Backend에서 추가).
-	Sandbox bool `json:"sandbox,omitempty"`
-	// DynamicTools는 tool_loop 모드에서 전달되는 커스텀 도구 정의 목록이다.
+	// Sandbox는 샌드박스 모드이다 ("read-only", "workspace-write", "danger-full-access").
+	Sandbox string `json:"sandbox,omitempty"`
+	// DeveloperInstructions는 개발자 제공 지침이다.
+	DeveloperInstructions string `json:"developerInstructions,omitempty"`
+	// BaseInstructions는 기본 지침이다.
+	BaseInstructions string `json:"baseInstructions,omitempty"`
+	// Config는 추가 설정 맵이다 (Codex config overrides).
+	Config map[string]interface{} `json:"config,omitempty"`
+	// DynamicTools는 실험적 API로 도구 정의를 등록한다.
+	// capabilities.experimentalApi = true 필요.
 	DynamicTools []DynamicToolDefinition `json:"dynamicTools,omitempty"`
 }
 
@@ -127,12 +138,52 @@ type ThreadResumeParams struct {
 	ThreadID string `json:"threadId"`
 }
 
+// TurnSettings는 Turn 시작 시 적용할 설정이다.
+type TurnSettings struct {
+	// DeveloperInstructions는 개발자 제공 지침이다 (시스템 프롬프트 추가).
+	DeveloperInstructions *string `json:"developer_instructions,omitempty"`
+}
+
 // TurnStartParams는 turn/start 요청 파라미터이다.
 type TurnStartParams struct {
 	// ThreadID는 Turn을 시작할 Thread의 ID이다.
 	ThreadID string `json:"threadId"`
 	// Input은 Turn 입력 목록이다.
 	Input []TurnInput `json:"input"`
+	// Effort는 모델 추론 노력 수준이다 ("low", "medium", "high").
+	Effort string `json:"effort,omitempty"`
+	// Summary는 스트리밍 요약 모드이다 ("auto", "concise", "detailed").
+	Summary string `json:"summary,omitempty"`
+	// CollaborationMode는 협업 모드이다 ("sequential", "parallel").
+	CollaborationMode string `json:"collaborationMode,omitempty"`
+	// OutputSchema는 구조화 출력을 위한 JSON Schema이다.
+	OutputSchema json.RawMessage `json:"outputSchema,omitempty"`
+	// Settings는 Turn별 추가 설정이다.
+	Settings *TurnSettings `json:"settings,omitempty"`
+}
+
+// TurnSteerParams는 turn/steer 요청 파라미터이다.
+// 진행 중인 Turn의 방향을 전환할 때 사용한다.
+type TurnSteerParams struct {
+	// ThreadID는 방향을 전환할 Thread의 ID이다.
+	ThreadID string `json:"threadId"`
+	// Input은 새 입력 데이터이다.
+	Input json.RawMessage `json:"input"`
+}
+
+// CollabToolCallItem은 협업 도구 호출 아이템이다.
+// dynamicTools 협업 모드에서 서버가 클라이언트에게 전달하는 도구 호출 단위이다.
+type CollabToolCallItem struct {
+	// Type은 아이템 타입이다 (예: "tool_call").
+	Type string `json:"type"`
+	// ID는 아이템 고유 ID이다.
+	ID string `json:"id,omitempty"`
+	// Name은 도구 이름이다.
+	Name string `json:"name"`
+	// Arguments는 도구 실행 인자이다 (임의의 JSON).
+	Arguments json.RawMessage `json:"arguments,omitempty"`
+	// CallID는 도구 호출 상관관계 ID이다.
+	CallID string `json:"callId,omitempty"`
 }
 
 // TurnStartResult는 turn/start 응답 결과이다.
@@ -248,23 +299,31 @@ type ApprovalRequest struct {
 }
 
 // DynamicToolCallRequest는 서버가 클라이언트에게 동적 도구 실행을 요청할 때의 파라미터이다.
+// v2 스키마: callId, turnId 필드 필수.
 type DynamicToolCallRequest struct {
 	// ThreadID는 Thread ID이다.
 	ThreadID string `json:"threadId"`
-	// ItemID는 Item ID이다.
-	ItemID string `json:"itemId"`
+	// TurnID는 Turn ID이다.
+	TurnID string `json:"turnId"`
+	// CallID는 도구 호출 ID이다.
+	CallID string `json:"callId"`
 	// Tool은 실행할 도구 이름이다.
 	Tool string `json:"tool"`
 	// Arguments는 도구 실행 인자이다.
 	Arguments json.RawMessage `json:"arguments"`
+	// ItemID는 레거시 호환 Item ID이다 (v1에서만 사용).
+	ItemID string `json:"itemId,omitempty"`
 }
 
 // ContentItem은 동적 도구 응답의 콘텐츠 항목이다.
+// v2 스키마: type은 "inputText" 또는 "inputImage"이다.
 type ContentItem struct {
-	// Type은 콘텐츠 타입이다 (예: "text").
+	// Type은 콘텐츠 타입이다 ("inputText" 또는 "inputImage").
 	Type string `json:"type"`
-	// Text는 텍스트 콘텐츠이다.
+	// Text는 텍스트 콘텐츠이다 (type="inputText"일 때).
 	Text string `json:"text,omitempty"`
+	// ImageURL은 이미지 URL이다 (type="inputImage"일 때).
+	ImageURL string `json:"imageUrl,omitempty"`
 }
 
 // DynamicToolCallResponse는 클라이언트가 동적 도구 실행 결과를 반환할 때의 응답이다.
@@ -283,4 +342,168 @@ type ApprovalResponseParams struct {
 	ItemID string `json:"itemId"`
 	// Decision은 승인 결정이다 ("accept", "acceptForSession", "decline", "cancel").
 	Decision string `json:"decision"`
+}
+
+// --- Thread 관리 타입 (REQ-009) ---
+
+// ThreadForkParams는 thread/fork 요청 파라미터이다.
+type ThreadForkParams struct {
+	// ThreadID는 포크할 원본 Thread의 ID이다.
+	ThreadID string `json:"threadId"`
+}
+
+// ThreadForkResult는 thread/fork 응답 결과이다.
+type ThreadForkResult struct {
+	// ThreadID는 새로 생성된 포크 Thread의 ID이다.
+	ThreadID string `json:"threadId,omitempty"`
+}
+
+// ThreadReadParams는 thread/read 요청 파라미터이다.
+type ThreadReadParams struct {
+	// ThreadID는 읽을 Thread의 ID이다.
+	ThreadID string `json:"threadId"`
+}
+
+// ThreadReadResult는 thread/read 응답 결과이다.
+type ThreadReadResult struct {
+	// ThreadID는 Thread의 ID이다.
+	ThreadID string `json:"threadId,omitempty"`
+	// Status는 Thread 상태이다 ("idle", "running", "completed", "error").
+	Status string `json:"status,omitempty"`
+	// Items는 Thread에 포함된 아이템 목록이다 (JSON 배열).
+	Items json.RawMessage `json:"items,omitempty"`
+}
+
+// ThreadListParams는 thread/list 요청 파라미터이다.
+type ThreadListParams struct {
+	// Limit은 반환할 최대 Thread 수이다.
+	Limit int `json:"limit,omitempty"`
+	// Cursor는 페이지네이션 커서이다.
+	Cursor string `json:"cursor,omitempty"`
+}
+
+// ThreadListResult는 thread/list 응답 결과이다.
+type ThreadListResult struct {
+	// Threads는 Thread 목록이다 (JSON 배열).
+	Threads json.RawMessage `json:"threads,omitempty"`
+	// NextCursor는 다음 페이지 커서이다.
+	NextCursor string `json:"nextCursor,omitempty"`
+}
+
+// ThreadRollbackParams는 thread/rollback 요청 파라미터이다.
+type ThreadRollbackParams struct {
+	// ThreadID는 롤백할 Thread의 ID이다.
+	ThreadID string `json:"threadId"`
+	// TurnID는 롤백 대상 Turn의 ID이다 (해당 Turn 이후를 제거).
+	TurnID string `json:"turnId,omitempty"`
+}
+
+// ThreadRollbackResult는 thread/rollback 응답 결과이다.
+type ThreadRollbackResult struct {
+	// ThreadID는 롤백된 Thread의 ID이다.
+	ThreadID string `json:"threadId,omitempty"`
+}
+
+// --- Model 목록 타입 (REQ-016) ---
+
+// ModelInfo는 모델 정보이다.
+type ModelInfo struct {
+	// ID는 모델 식별자이다 (예: "o4-mini").
+	ID string `json:"id"`
+	// Name은 모델 표시 이름이다.
+	Name string `json:"name,omitempty"`
+	// Description은 모델 설명이다.
+	Description string `json:"description,omitempty"`
+}
+
+// ModelListResult는 model/list 응답 결과이다.
+type ModelListResult struct {
+	// Models는 사용 가능한 모델 목록이다.
+	Models []ModelInfo `json:"models,omitempty"`
+}
+
+// --- Review 타입 (REQ-011) ---
+
+// ReviewStartParams는 review/start 요청 파라미터이다.
+type ReviewStartParams struct {
+	// ThreadID는 리뷰를 시작할 Thread의 ID이다.
+	ThreadID string `json:"threadId"`
+	// Prompt는 리뷰 요청 프롬프트이다.
+	Prompt string `json:"prompt,omitempty"`
+}
+
+// ReviewStartResult는 review/start 응답 결과이다.
+type ReviewStartResult struct {
+	// ReviewID는 생성된 리뷰의 ID이다.
+	ReviewID string `json:"reviewId,omitempty"`
+}
+
+// --- Config 타입 (REQ-012) ---
+
+// ConfigReadResult는 config/read 응답 결과이다.
+type ConfigReadResult struct {
+	// Config는 현재 설정 값이다 (임의의 JSON 객체).
+	Config json.RawMessage `json:"config,omitempty"`
+}
+
+// ConfigWriteParams는 config/value/write 요청 파라미터이다.
+type ConfigWriteParams struct {
+	// Key는 설정 키이다.
+	Key string `json:"key"`
+	// Value는 설정 값이다 (임의의 JSON).
+	Value json.RawMessage `json:"value,omitempty"`
+}
+
+// ConfigBatchWriteParams는 config/batchWrite 요청 파라미터이다.
+type ConfigBatchWriteParams struct {
+	// Updates는 키-값 쌍으로 된 설정 업데이트 맵이다.
+	Updates map[string]json.RawMessage `json:"updates,omitempty"`
+}
+
+// --- Utility 목록 타입 (REQ-012) ---
+
+// SkillInfo는 스킬 정보이다.
+type SkillInfo struct {
+	// ID는 스킬 식별자이다.
+	ID string `json:"id"`
+	// Name은 스킬 이름이다.
+	Name string `json:"name,omitempty"`
+	// Enabled는 스킬 활성화 여부이다.
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// SkillsListResult는 skills/list 응답 결과이다.
+type SkillsListResult struct {
+	// Skills는 사용 가능한 스킬 목록이다.
+	Skills []SkillInfo `json:"skills,omitempty"`
+}
+
+// McpServerStatus는 MCP 서버 상태 정보이다.
+type McpServerStatus struct {
+	// Name은 서버 이름이다.
+	Name string `json:"name"`
+	// Status는 서버 상태이다 ("connected", "disconnected", "error").
+	Status string `json:"status,omitempty"`
+}
+
+// McpServerStatusListResult는 mcpServerStatus/list 응답 결과이다.
+type McpServerStatusListResult struct {
+	// Servers는 MCP 서버 상태 목록이다.
+	Servers []McpServerStatus `json:"servers,omitempty"`
+}
+
+// ExperimentalFeature는 실험적 기능 정보이다.
+type ExperimentalFeature struct {
+	// ID는 기능 식별자이다.
+	ID string `json:"id"`
+	// Name은 기능 이름이다.
+	Name string `json:"name,omitempty"`
+	// Enabled는 기능 활성화 여부이다.
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// ExperimentalFeatureListResult는 experimentalFeature/list 응답 결과이다.
+type ExperimentalFeatureListResult struct {
+	// Features는 실험적 기능 목록이다.
+	Features []ExperimentalFeature `json:"features,omitempty"`
 }

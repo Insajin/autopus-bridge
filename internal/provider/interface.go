@@ -79,6 +79,11 @@ type ExecuteRequest struct {
 
 	// ToolDefinitions는 tool_loop 모드에서 노출할 business tool schema입니다.
 	ToolDefinitions []ws.ToolDefinition
+
+	// Timeout은 실행 타임아웃(초)입니다.
+	// 0이면 기본값(120초)이 사용됩니다.
+	// 최소 30초, 최대 600초로 클램핑됩니다.
+	Timeout int
 }
 
 // ExecuteResponse는 AI 프로바이더 실행 결과입니다.

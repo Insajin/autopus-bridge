@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/insajin/autopus-bridge/internal/approval"
+	ws "github.com/insajin/autopus-agent-protocol"
 	"github.com/insajin/autopus-codex-rpc/client"
 	"github.com/insajin/autopus-codex-rpc/protocol"
 	"github.com/rs/zerolog"
@@ -529,16 +530,22 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		cwd = "."
 	}
 
-	// tool_loop 모드이고 ToolDefinitions가 있을 때 dynamicTools로 변환한다.
+	// tool_loop 모드일 때 dynamicTools로 네이티브 도구를 등록한다.
+	// capabilities.experimentalApi = true 필요 (initialize 시 이미 설정됨).
 	var dynamicTools []protocol.DynamicToolDefinition
 	if req.ResponseMode == "tool_loop" && len(req.ToolDefinitions) > 0 {
+		dynamicTools = make([]protocol.DynamicToolDefinition, 0, len(req.ToolDefinitions))
 		for _, td := range req.ToolDefinitions {
-			dynamicTools = append(dynamicTools, protocol.DynamicToolDefinition{
+			dt := protocol.DynamicToolDefinition{
 				Name:        td.Name,
 				Description: td.Description,
-				InputSchema: td.InputSchema,
-			})
+			}
+			if len(td.InputSchema) > 0 {
+				dt.InputSchema = td.InputSchema
+			}
+			dynamicTools = append(dynamicTools, dt)
 		}
+		p.logger.Info().Int("tool_count", len(dynamicTools)).Msg("tool_loop: dynamicTools 네이티브 등록")
 	}
 
 	threadResult, err := rpcClient.Call(ctx, protocol.MethodThreadStart, protocol.ThreadStartParams{
@@ -740,23 +747,30 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 			})
 			mu.Unlock()
 
-		case "dynamicToolCall":
-			// item/completed 알림으로 수신된 동적 도구 호출 완료 데이터
-			var dtcData struct {
+		case "dynamicToolCall", "collabToolCall":
+			// 동적/협업 도구 호출 완료 데이터 — 동일한 {tool, arguments} JSON 구조
+			var tcData struct {
 				Tool      string          `json:"tool"`
 				Arguments json.RawMessage `json:"arguments"`
 			}
-			if err := json.Unmarshal(item.Data, &dtcData); err != nil {
-				p.logger.Warn().Err(err).Msg("동적 도구 호출 완료 데이터 파싱 실패")
+			if err := json.Unmarshal(item.Data, &tcData); err != nil {
+				p.logger.Warn().Err(err).Str("item_type", item.ItemType).Msg("도구 호출 완료 데이터 파싱 실패")
 				return
 			}
 			mu.Lock()
 			toolCalls = append(toolCalls, ToolCall{
 				ID:    item.ItemID,
-				Name:  dtcData.Tool,
-				Input: dtcData.Arguments,
+				Name:  tcData.Tool,
+				Input: tcData.Arguments,
 			})
 			mu.Unlock()
+
+		default:
+			// 알 수 없는 아이템 타입 — 향후 프로토콜 확장을 위해 경고만 로깅하고 패닉하지 않는다.
+			p.logger.Warn().
+				Str("item_type", item.ItemType).
+				Str("item_id", item.ItemID).
+				Msg("알 수 없는 아이템 타입 수신 — 무시")
 		}
 	}
 
@@ -767,35 +781,40 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 
 	// item/tool/call 요청 핸들러 등록 (서버 -> 클라이언트 요청, id 있음)
 	// 서버가 동적 도구 실행을 요청할 때 호출된다.
+	// dynamicTools 네이티브 등록을 지원하므로 이 핸들러로 실제 도구 호출이 전달된다.
 	rpcClient.OnRequest(protocol.MethodToolCall, func(id int64, method string, params json.RawMessage) interface{} {
 		var dtcReq protocol.DynamicToolCallRequest
 		if err := json.Unmarshal(params, &dtcReq); err != nil {
 			p.logger.Warn().Err(err).Msg("item/tool/call 요청 파싱 실패")
 			return protocol.DynamicToolCallResponse{
 				Success:      false,
-				ContentItems: []protocol.ContentItem{{Type: "text", Text: "요청 파싱 실패"}},
+				ContentItems: []protocol.ContentItem{{Type: "inputText", Text: "요청 파싱 실패"}},
 			}
 		}
 
-		// 도구 호출 정보를 캡처한다. 실제 실행은 백엔드에서 수행된다.
+		// 도구 호출 ID 결정: CallID > ItemID 우선순위
+		callID := dtcReq.CallID
+		if callID == "" {
+			callID = dtcReq.ItemID
+		}
+
 		mu.Lock()
 		toolCalls = append(toolCalls, ToolCall{
-			ID:    dtcReq.ItemID,
+			ID:    callID,
 			Name:  dtcReq.Tool,
 			Input: dtcReq.Arguments,
 		})
 		mu.Unlock()
 
 		p.logger.Debug().
-			Str("item_id", dtcReq.ItemID).
+			Str("call_id", callID).
 			Str("tool", dtcReq.Tool).
 			Msg("동적 도구 호출 캡처 완료")
 
-		// 브릿지는 도구 호출 정보를 캡처하고 플레이스홀더 응답을 반환한다.
 		return protocol.DynamicToolCallResponse{
 			Success: true,
 			ContentItems: []protocol.ContentItem{
-				{Type: "text", Text: "Tool call captured"},
+				{Type: "inputText", Text: "Tool call captured by bridge"},
 			},
 		}
 	})
@@ -862,36 +881,67 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 
 	// Turn 완료 핸들러 — 구버전: turn/completed
 	// sync.Once를 통해 turnDone 채널을 안전하게 한 번만 닫는다.
+	turnStarted := make(chan struct{}) // turn/start 호출 후 닫힘
 	rpcClient.OnNotification(protocol.MethodTurnCompleted, func(method string, params json.RawMessage) {
-		closeTurnDone()
+		// turn/start가 호출되기 전에 도착한 turn/completed는 무시한다
+		select {
+		case <-turnStarted:
+			p.logger.Debug().Str("method", method).Msg("turn/completed 수신 → turnDone 닫기")
+			closeTurnDone()
+		default:
+			p.logger.Warn().Str("method", method).Msg("turn/start 전에 도착한 turn/completed — 무시")
+		}
 	})
 
 	// Turn 완료 핸들러 — 신버전: codex/event/task_complete (v0.114.0+)
 	// 구버전과 신버전 이벤트가 동시에 도달할 수 있으므로 sync.Once로 보호한다.
 	rpcClient.OnNotification(protocol.MethodCodexTaskComplete, func(method string, params json.RawMessage) {
-		closeTurnDone()
+		select {
+		case <-turnStarted:
+			p.logger.Debug().Str("method", method).Msg("task_complete 수신 → turnDone 닫기")
+			closeTurnDone()
+		default:
+			p.logger.Warn().Str("method", method).Msg("turn/start 전에 도착한 task_complete — 무시")
+		}
 	})
 
 	// 5. turn/start 호출
+	// tool_loop 모드일 때 대화 이력을 프롬프트에 포함한다.
+	turnPrompt := req.Prompt
+	if req.ResponseMode == "tool_loop" && len(req.ToolLoopMessages) > 0 {
+		turnPrompt = buildAppServerTurnPrompt(req)
+	}
+
 	_, err = rpcClient.Call(ctx, protocol.MethodTurnStart, protocol.TurnStartParams{
 		ThreadID: thread.ThreadID,
 		Input: []protocol.TurnInput{
 			{
 				Type: "text",
-				Text: req.Prompt,
+				Text: turnPrompt,
 			},
 		},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("turn/start 실패: %w", err)
 	}
+	close(turnStarted) // turn/start 완료 → 이제부터 turn/completed 수신 허용
 
 	// 6. Turn 완료 또는 컨텍스트 취소 대기
+	// resolveExecuteTimeout으로 계산한 타임아웃을 적용하여 행(hang) 방지
+	// developerInstructions(~20KB)를 처리하는 1차 턴은 최대 77초 소요 확인됨
+	turnTimeoutDur := resolveExecuteTimeout(req.Timeout)
+	turnTimeout := time.After(turnTimeoutDur)
 	select {
 	case <-turnDone:
 		// 정상 완료
 	case <-ctx.Done():
 		return nil, fmt.Errorf("실행 타임아웃: %w", ctx.Err())
+	case <-turnTimeout:
+		p.logger.Warn().
+			Str("response_mode", req.ResponseMode).
+			Dur("timeout", turnTimeoutDur).
+			Msg("턴 타임아웃 초과")
+		return nil, fmt.Errorf("턴 타임아웃: %v 초과", turnTimeoutDur)
 	}
 
 	// 7. 남은 스트리밍 데이터 플러시
@@ -907,16 +957,185 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 	copy(resultToolCalls, toolCalls)
 	mu.Unlock()
 
+	// 디버그: tool_loop 실행 결과 로깅
+	if req.ResponseMode == "tool_loop" {
+		outputPreview := output
+		if len(outputPreview) > 500 {
+			outputPreview = outputPreview[:500] + "...(truncated)"
+		}
+		p.logger.Info().
+			Int("output_len", len(output)).
+			Int("native_tool_calls", len(resultToolCalls)).
+			Str("output_preview", outputPreview).
+			Msg("tool_loop: 실행 결과")
+	}
+
+	// tool_loop 모드일 때 텍스트 출력에서 도구 호출 마커를 파싱한다.
+	if req.ResponseMode == "tool_loop" && len(resultToolCalls) == 0 && output != "" {
+		parsedCalls, remainingText := parseCLIToolCalls(output)
+		if len(parsedCalls) > 0 {
+			resultToolCalls = parsedCalls
+			output = remainingText
+			p.logger.Debug().Int("parsed_tool_calls", len(parsedCalls)).Msg("tool_loop: 텍스트에서 도구 호출 파싱 완료")
+		}
+	}
+
 	resp := &ExecuteResponse{
 		Output:    output,
 		ToolCalls: resultToolCalls,
 		Model:     model,
 	}
-	// 도구 호출이 있을 때 StopReason을 "tool_use"로 설정한다.
 	if len(resultToolCalls) > 0 {
 		resp.StopReason = "tool_use"
+	} else if req.ResponseMode == "tool_loop" {
+		resp.StopReason = "end_turn"
 	}
 	return resp, nil
+}
+
+// buildAppServerToolInstructions는 Codex App Server의 developerInstructions에 주입할
+// 도구 정의 텍스트를 생성한다. Codex v0.114.0은 ThreadStartParams.DynamicTools를
+// 아직 지원하지 않으므로 프롬프트 주입 방식을 사용한다.
+func buildAppServerToolInstructions(tools []ws.ToolDefinition) string {
+	var sb strings.Builder
+
+	sb.WriteString("=== AVAILABLE TOOLS ===\n")
+	sb.WriteString("You have access to the following tools. When a task requires tool usage, you MUST call the appropriate tool.\n\n")
+
+	for _, tool := range tools {
+		sb.WriteString(fmt.Sprintf("Tool: %s\n", tool.Name))
+		if tool.Description != "" {
+			sb.WriteString(fmt.Sprintf("Description: %s\n", tool.Description))
+		}
+		if len(tool.InputSchema) > 0 && string(tool.InputSchema) != "null" {
+			var schemaObj interface{}
+			if err := json.Unmarshal(tool.InputSchema, &schemaObj); err == nil {
+				if pretty, err := json.MarshalIndent(schemaObj, "  ", "  "); err == nil {
+					sb.WriteString("Parameters:\n  ")
+					sb.Write(pretty)
+					sb.WriteString("\n")
+				}
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	sb.WriteString("=== TOOL CALL FORMAT ===\n")
+	sb.WriteString("CRITICAL: When you need to call a tool, output EXACTLY this format:\n\n")
+	sb.WriteString("<<<TOOL_CALL>>>\n")
+	sb.WriteString(`{"name": "tool_name", "arguments": {"param1": "value1"}}`)
+	sb.WriteString("\n<<<END_TOOL_CALL>>>\n\n")
+	sb.WriteString("Rules:\n")
+	sb.WriteString("- The JSON MUST be on a single line between the markers\n")
+	sb.WriteString("- 'arguments' must match the tool's parameter schema exactly\n")
+	sb.WriteString("- You can call multiple tools by outputting multiple <<<TOOL_CALL>>> blocks\n")
+	sb.WriteString("- If you do NOT need to call a tool, respond with normal text only\n")
+	sb.WriteString("- Always prefer calling tools over describing what you would do\n")
+
+	return sb.String()
+}
+
+// buildAppServerTurnPrompt는 tool_loop 모드에서 대화 이력을 포함한 턴 프롬프트를 생성한다.
+// 프롬프트 폭발을 방지하기 위해 최근 4개 메시지만 유지한다 (assistant+tool 쌍 2턴분).
+func buildAppServerTurnPrompt(req ExecuteRequest) string {
+	var sb strings.Builder
+
+	// 대화 이력 윈도잉: 최근 4개 메시지만 포함 (이전 턴이 많으면 잘라냄)
+	messages := req.ToolLoopMessages
+	const maxHistoryMessages = 4
+	if len(messages) > maxHistoryMessages {
+		sb.WriteString("[Previous conversation history truncated for brevity]\n\n")
+		messages = messages[len(messages)-maxHistoryMessages:]
+	}
+
+	for _, msg := range messages {
+		switch msg.Role {
+		case "user":
+			sb.WriteString("[User]: ")
+			sb.WriteString(msg.Content)
+			sb.WriteString("\n\n")
+		case "assistant":
+			sb.WriteString("[Assistant]: ")
+			if msg.Content != "" {
+				sb.WriteString(msg.Content)
+			}
+			for _, tc := range msg.ToolCalls {
+				sb.WriteString("\n<<<TOOL_CALL>>>\n")
+				payload := struct {
+					Name      string          `json:"name"`
+					Arguments json.RawMessage `json:"arguments"`
+				}{Name: tc.Name, Arguments: tc.Input}
+				if data, err := json.Marshal(payload); err == nil {
+					sb.Write(data)
+				}
+				sb.WriteString("\n<<<END_TOOL_CALL>>>")
+			}
+			sb.WriteString("\n\n")
+		case "tool":
+			sb.WriteString("[Tool Results]:\n")
+			for _, tr := range msg.ToolResults {
+				sb.WriteString(fmt.Sprintf("  %s: %s\n", tr.ToolName, tr.Content))
+				if tr.IsError {
+					sb.WriteString("  (ERROR)\n")
+				}
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	// 현재 사용자 프롬프트 추가
+	if req.Prompt != "" {
+		sb.WriteString("[User]: ")
+		sb.WriteString(req.Prompt)
+		sb.WriteString("\n\n")
+	}
+
+	return sb.String()
+}
+
+// resolveExecuteTimeout은 ExecuteRequest.Timeout 값을 실제 타임아웃 Duration으로 변환한다.
+// - 0 또는 음수: 기본값 120초
+// - 30초 미만: 30초로 클램핑
+// - 600초 초과: 600초로 클램핑
+// @MX:ANCHOR: [AUTO] 타임아웃 클램핑 규칙 변경 시 테스트(TestCodexAppServerProvider_TimeoutResolution) 반드시 갱신
+// @MX:REASON: [AUTO] 기본값/최소/최대 클램핑 삼중 경계 — 단순 상수 변경도 테스트 실패로 이어짐
+func resolveExecuteTimeout(timeoutSecs int) time.Duration {
+	const (
+		defaultTimeout = 120 * time.Second
+		minTimeout     = 30 * time.Second
+		maxTimeout     = 600 * time.Second
+	)
+
+	if timeoutSecs <= 0 {
+		return defaultTimeout
+	}
+
+	d := time.Duration(timeoutSecs) * time.Second
+	if d < minTimeout {
+		return minTimeout
+	}
+	if d > maxTimeout {
+		return maxTimeout
+	}
+	return d
+}
+
+// Steer는 진행 중인 Turn의 방향을 전환합니다.
+// turn/steer JSON-RPC 요청을 전송하여 에이전트의 다음 행동을 유도합니다.
+func (p *CodexAppServerProvider) Steer(ctx context.Context, threadID string, input json.RawMessage) error {
+	rpcClient := p.process.Client()
+	if rpcClient == nil || !p.process.IsRunning() {
+		return ErrProcessNotRunning
+	}
+
+	_, err := rpcClient.Call(ctx, protocol.MethodTurnSteer, protocol.TurnSteerParams{
+		ThreadID: threadID,
+		Input:    input,
+	})
+	if err != nil {
+		return fmt.Errorf("turn/steer 실패: %w", err)
+	}
+	return nil
 }
 
 // Close는 프로바이더를 종료합니다. 프로세스를 중지합니다.

@@ -68,4 +68,78 @@ const (
 	// MethodCodexTaskComplete는 Turn(태스크) 완료 이벤트이다 (v0.114.0+).
 	// turn/completed의 새 이름.
 	MethodCodexTaskComplete = "codex/event/task_complete"
+
+	// --- REQ-006: Turn 조종 메서드 ---
+
+	// MethodTurnSteer는 진행 중인 Turn의 방향을 전환하는 메서드이다.
+	MethodTurnSteer = "turn/steer"
+
+	// --- REQ-009: Thread 관리 메서드 ---
+
+	// MethodThreadFork는 Thread를 포크하는 메서드이다.
+	MethodThreadFork = "thread/fork"
+	// MethodThreadRead는 Thread 정보를 읽는 메서드이다.
+	MethodThreadRead = "thread/read"
+	// MethodThreadList는 Thread 목록을 조회하는 메서드이다.
+	MethodThreadList = "thread/list"
+	// MethodThreadRollback는 Thread를 특정 Turn으로 롤백하는 메서드이다.
+	MethodThreadRollback = "thread/rollback"
+
+	// --- REQ-011: Review 메서드 ---
+
+	// MethodReviewStart는 코드 리뷰를 시작하는 메서드이다.
+	MethodReviewStart = "review/start"
+
+	// --- REQ-016: Model 목록 메서드 ---
+
+	// MethodModelList는 사용 가능한 모델 목록을 조회하는 메서드이다.
+	MethodModelList = "model/list"
+
+	// --- REQ-012: Config 메서드 ---
+
+	// MethodConfigRead는 현재 설정을 읽는 메서드이다.
+	MethodConfigRead = "config/read"
+	// MethodConfigValueWrite는 단일 설정 값을 쓰는 메서드이다.
+	MethodConfigValueWrite = "config/value/write"
+	// MethodConfigBatchWrite는 여러 설정 값을 일괄 쓰는 메서드이다.
+	MethodConfigBatchWrite = "config/batchWrite"
+
+	// MethodSkillsList는 사용 가능한 스킬 목록을 조회하는 메서드이다.
+	MethodSkillsList = "skills/list"
+	// MethodMcpServerStatusList는 MCP 서버 상태 목록을 조회하는 메서드이다.
+	MethodMcpServerStatusList = "mcpServerStatus/list"
+	// MethodExperimentalFeatureList는 실험적 기능 목록을 조회하는 메서드이다.
+	MethodExperimentalFeatureList = "experimentalFeature/list"
+)
+
+// --- REQ-010: 알림 메서드 상수 ---
+
+const (
+	// MethodTurnPlanUpdated는 Turn 플랜 업데이트 알림 메서드이다 (서버 -> 클라이언트).
+	MethodTurnPlanUpdated = "turn/plan/updated"
+	// MethodTurnDiffUpdated는 Turn diff 업데이트 알림 메서드이다 (서버 -> 클라이언트).
+	MethodTurnDiffUpdated = "turn/diff/updated"
+	// MethodItemReasoningSummaryTextDelta는 추론 요약 텍스트 증분 알림 메서드이다.
+	MethodItemReasoningSummaryTextDelta = "item/reasoning/summaryTextDelta"
+	// MethodItemReasoningTextDelta는 추론 텍스트 증분 알림 메서드이다.
+	MethodItemReasoningTextDelta = "item/reasoning/textDelta"
+	// MethodThreadStatusChanged는 Thread 상태 변경 알림 메서드이다.
+	MethodThreadStatusChanged = "thread/status/changed"
+	// MethodThreadTokenUsageUpdated는 Thread 토큰 사용량 업데이트 알림 메서드이다.
+	MethodThreadTokenUsageUpdated = "thread/tokenUsage/updated"
+)
+
+// --- REQ-010: 아이템 타입 상수 ---
+
+const (
+	// ItemTypeReasoning은 추론 아이템 타입이다.
+	ItemTypeReasoning = "reasoning"
+	// ItemTypePlan은 실행 계획 아이템 타입이다.
+	ItemTypePlan = "plan"
+	// ItemTypeContextCompaction은 컨텍스트 압축 아이템 타입이다.
+	ItemTypeContextCompaction = "contextCompaction"
+	// ItemTypeWebSearch는 웹 검색 아이템 타입이다.
+	ItemTypeWebSearch = "webSearch"
+	// ItemTypeImageView는 이미지 뷰 아이템 타입이다.
+	ItemTypeImageView = "imageView"
 )

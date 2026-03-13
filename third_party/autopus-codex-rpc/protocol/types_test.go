@@ -206,11 +206,12 @@ func TestJSONRPCNotification_Serialization(t *testing.T) {
 // TestCodexDomainTypes는 Codex 도메인 타입의 직렬화를 검증한다.
 func TestCodexDomainTypes(t *testing.T) {
 	t.Run("ThreadStartParams 직렬화", func(t *testing.T) {
+		// Sandbox는 string 타입: "read-only", "workspace-write", "danger-full-access"
 		params := protocol.ThreadStartParams{
 			Model:          "o4-mini",
 			Cwd:            "/workspace",
 			ApprovalPolicy: "auto-approve",
-			Sandbox:        true,
+			Sandbox:        "workspace-write",
 		}
 
 		data, err := json.Marshal(params)
@@ -226,8 +227,8 @@ func TestCodexDomainTypes(t *testing.T) {
 		if decoded.Model != "o4-mini" {
 			t.Errorf("Model 불일치: got %q, want %q", decoded.Model, "o4-mini")
 		}
-		if !decoded.Sandbox {
-			t.Error("Sandbox가 true여야 함")
+		if decoded.Sandbox != "workspace-write" {
+			t.Errorf("Sandbox 불일치: got %q, want %q", decoded.Sandbox, "workspace-write")
 		}
 	})
 
@@ -246,7 +247,7 @@ func TestCodexDomainTypes(t *testing.T) {
 		if err := json.Unmarshal(data, &raw); err != nil {
 			t.Fatalf("역직렬화 실패: %v", err)
 		}
-		// Sandbox=false면 omitempty로 인해 필드 없어야 함
+		// Sandbox가 빈 문자열이면 omitempty로 인해 필드 없어야 함
 		if _, ok := raw["sandbox"]; ok {
 			t.Error("sandbox 필드가 없어야 하지만 존재함 (omitempty)")
 		}

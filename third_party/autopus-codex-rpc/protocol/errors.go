@@ -42,6 +42,9 @@ const (
 	ErrCodeUnauthorized = -32003
 	// ErrCodeConnectionFailed는 연결 실패이다.
 	ErrCodeConnectionFailed = -32004
+	// ErrCodeServerOverloaded는 서버 과부하이다.
+	// JSON-RPC 서버 에러 범위(-32099 ~ -32000) 내 값이다.
+	ErrCodeServerOverloaded = -32005
 )
 
 // --- Codex App Server 에러 코드 문자열 상수 ---
@@ -59,6 +62,15 @@ const (
 	CodexErrBadRequest = "BadRequest"
 	// CodexErrSandboxError는 샌드박스 에러 코드이다.
 	CodexErrSandboxError = "SandboxError"
+
+	// --- REQ-005: Response Stream 에러 코드 ---
+
+	// CodexErrResponseStreamConnectionFailed는 응답 스트림 연결 실패 에러 코드이다.
+	CodexErrResponseStreamConnectionFailed = "ResponseStreamConnectionFailed"
+	// CodexErrResponseStreamDisconnected는 응답 스트림 연결 끊김 에러 코드이다.
+	CodexErrResponseStreamDisconnected = "ResponseStreamDisconnected"
+	// CodexErrResponseTooManyFailedAttempts는 응답 실패 횟수 초과 에러 코드이다.
+	CodexErrResponseTooManyFailedAttempts = "ResponseTooManyFailedAttempts"
 )
 
 // MapJSONRPCError는 JSON-RPC 에러 코드를 Go error로 변환한다.

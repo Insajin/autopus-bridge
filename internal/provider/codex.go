@@ -90,10 +90,14 @@ type openAIChatFunctionCall struct {
 }
 
 // CodexProvider는 OpenAI Codex API 프로바이더입니다.
+// App Server가 사용 가능하면 App Server로 위임하고, 그렇지 않으면 HTTP API를 사용합니다.
 type CodexProvider struct {
 	httpClient *http.Client
 	config     ProviderConfig
 	baseURL    string
+	// appServer는 선택적으로 주입되는 Codex App Server 프로바이더입니다.
+	// nil이 아니고 실행 중이면 Execute()가 App Server로 위임됩니다.
+	appServer *CodexAppServerProvider
 }
 
 // CodexProviderOption은 CodexProvider 설정 옵션입니다.
@@ -117,6 +121,14 @@ func WithCodexDefaultModel(model string) CodexProviderOption {
 func WithCodexMaxRetries(retries int) CodexProviderOption {
 	return func(p *CodexProvider) {
 		p.config.MaxRetries = retries
+	}
+}
+
+// WithCodexAppServer는 Codex App Server 프로바이더를 설정합니다.
+// 설정된 App Server가 실행 중이면 Execute()가 App Server로 위임됩니다.
+func WithCodexAppServer(appServer *CodexAppServerProvider) CodexProviderOption {
+	return func(p *CodexProvider) {
+		p.appServer = appServer
 	}
 }
 
@@ -166,6 +178,17 @@ func (p *CodexProvider) ValidateConfig() error {
 	return nil
 }
 
+// SetAppServer는 Codex App Server 프로바이더를 동적으로 등록합니다.
+// 등록된 App Server가 실행 중이면 Execute()가 App Server로 위임됩니다.
+func (p *CodexProvider) SetAppServer(appServer *CodexAppServerProvider) {
+	p.appServer = appServer
+}
+
+// IsAppServerAvailable은 App Server가 등록되었고 실행 중인지 여부를 반환합니다.
+func (p *CodexProvider) IsAppServerAvailable() bool {
+	return p.appServer != nil && p.appServer.process.IsRunning()
+}
+
 // Supports는 주어진 모델명을 지원하는지 확인합니다.
 // OpenRouter 형식(openai/o3-mini)과 레거시 형식 모두 지원합니다.
 // gpt-*, o4-*, o3- 접두사를 가진 모든 모델을 지원하여 새 버전 자동 반영.
@@ -175,8 +198,24 @@ func (p *CodexProvider) Supports(model string) bool {
 }
 
 // Execute는 프롬프트를 실행하고 결과를 반환합니다.
+// App Server가 사용 가능하면 App Server로 위임하고, 그렇지 않으면 HTTP API를 사용합니다.
 func (p *CodexProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
-	log.Printf("[codex] Execute called: mode=%s model=%s tool_defs=%d", req.ResponseMode, req.Model, len(req.ToolDefinitions))
+	log.Printf("[codex] Execute called: mode=%s model=%s tool_defs=%d app_server=%v", req.ResponseMode, req.Model, len(req.ToolDefinitions), p.IsAppServerAvailable())
+
+	// App Server가 사용 가능하면 위임한다.
+	if p.IsAppServerAvailable() {
+		resp, err := p.appServer.Execute(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		// Provider 이름이 비어 있으면 현재 프로바이더 이름으로 채운다.
+		if resp != nil && resp.Provider == "" {
+			resp.Provider = p.Name()
+		}
+		return resp, nil
+	}
+
+	// App Server 미사용 시 HTTP 경로
 	if req.ResponseMode == "tool_loop" {
 		return p.executeToolLoop(ctx, req)
 	}
