@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/insajin/autopus-bridge/internal/apiclient"
 	"github.com/spf13/cobra"
@@ -23,9 +24,12 @@ type Message struct {
 }
 
 // MessageWithUser는 작성자 표시 이름을 포함한 메시지 정보입니다.
+// 에이전트가 작성한 메시지의 경우 AgentName, AgentTier가 채워진다. REQ-AC-003.
 type MessageWithUser struct {
 	Message
-	UserDisplayName string `json:"user_display_name,omitempty"`
+	UserDisplayName string  `json:"user_display_name,omitempty"`
+	AgentName       *string `json:"agent_name,omitempty"`
+	AgentTier       *string `json:"agent_tier,omitempty"`
 }
 
 // messageListResponse는 메시지 목록 API의 중첩 응답 구조입니다.
@@ -258,12 +262,20 @@ func runMessageAgentMessages(client *apiclient.Client, out io.Writer, channelID 
 
 // printMessageTable은 메시지 목록을 테이블 형식으로 출력합니다.
 // 컬럼: TIME, AUTHOR, CONTENT (80자 초과 시 잘림)
+// 작성자 우선순위: UserDisplayName > [TIER] AgentName > UserID. REQ-AC-002.
 func printMessageTable(out io.Writer, messages []MessageWithUser) {
 	headers := []string{"TIME", "AUTHOR", "CONTENT"}
 	rows := make([][]string, len(messages))
 	for i, msg := range messages {
-		// 작성자: UserDisplayName 우선, 없으면 UserID 사용
+		// 작성자 결정: UserDisplayName 우선, 없으면 에이전트 이름([TIER] AgentName), 마지막으로 UserID
 		author := msg.UserDisplayName
+		if author == "" && msg.AgentName != nil {
+			tier := ""
+			if msg.AgentTier != nil {
+				tier = strings.ToUpper(*msg.AgentTier)
+			}
+			author = fmt.Sprintf("[%s] %s", tier, *msg.AgentName)
+		}
 		if author == "" {
 			author = msg.UserID
 		}

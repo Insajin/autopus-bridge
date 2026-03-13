@@ -326,6 +326,175 @@ func TestRunMessageAgentMessages_InvalidChannelID(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// REQ-AC-002: 에이전트 작성자 이름 표시 - [TIER] AgentName 형식
+// REQ-AC-003: MessageWithUser 구조체에 AgentName, AgentTier 필드 포함
+// ---------------------------------------------------------------------------
+
+// TestMessageWithUser_HasAgentFields는 MessageWithUser 구조체에
+// AgentName과 AgentTier 필드가 있는지 컴파일 시점에 검증한다.
+// RED 단계: 필드가 없으면 컴파일 에러로 실패한다.
+func TestMessageWithUser_HasAgentFields(t *testing.T) {
+	agentName := "분석가"
+	agentTier := "worker"
+
+	// 컴파일 타임에 필드 존재 여부 검증
+	msg := MessageWithUser{
+		Message:         Message{ID: "msg-a1", Content: "분석 결과", CreatedAt: "2026-01-01T00:00:00Z"},
+		UserDisplayName: "",
+		AgentName:       &agentName,
+		AgentTier:       &agentTier,
+	}
+
+	if msg.AgentName == nil || *msg.AgentName != "분석가" {
+		t.Errorf("AgentName 필드가 예상값과 다릅니다: %v", msg.AgentName)
+	}
+	if msg.AgentTier == nil || *msg.AgentTier != "worker" {
+		t.Errorf("AgentTier 필드가 예상값과 다릅니다: %v", msg.AgentTier)
+	}
+}
+
+// TestPrintMessageTable_AgentAuthorFallback은 UserDisplayName이 없을 때
+// AgentName을 "[TIER] AgentName" 형식으로 표시하는지 검증한다.
+// RED 단계: AgentName 폴백 로직이 없으면 빈 문자열이나 UserID가 표시되어 실패한다.
+func TestPrintMessageTable_AgentAuthorFallback(t *testing.T) {
+	agentName := "기획자"
+	agentTier := "pm"
+
+	messages := []MessageWithUser{
+		{
+			Message:         Message{ID: "msg-a1", Content: "기획 내용", CreatedAt: "2026-01-01T00:00:00Z", UserID: "user-uuid-123"},
+			UserDisplayName: "", // 에이전트는 UserDisplayName이 비어있다
+			AgentName:       &agentName,
+			AgentTier:       &agentTier,
+		},
+	}
+
+	var buf bytes.Buffer
+	printMessageTable(&buf, messages)
+
+	out := buf.String()
+	// "[PM] 기획자" 형식이 포함되어야 한다
+	if !strings.Contains(out, "[PM] 기획자") {
+		t.Errorf("에이전트 작성자가 '[PM] 기획자' 형식으로 표시되어야 합니다. 실제 출력: %s", out)
+	}
+}
+
+// TestPrintMessageTable_AgentAuthorUppercase는 에이전트 티어가 대문자로 표시되는지 검증한다.
+// worker 티어는 [WORKER]로 표시되어야 한다.
+func TestPrintMessageTable_AgentAuthorUppercase(t *testing.T) {
+	agentName := "코딩봇"
+	agentTier := "worker"
+
+	messages := []MessageWithUser{
+		{
+			Message:         Message{ID: "msg-w1", Content: "코드 작성 완료", CreatedAt: "2026-01-01T00:00:00Z"},
+			UserDisplayName: "",
+			AgentName:       &agentName,
+			AgentTier:       &agentTier,
+		},
+	}
+
+	var buf bytes.Buffer
+	printMessageTable(&buf, messages)
+
+	out := buf.String()
+	// 티어는 대문자: [WORKER]
+	if !strings.Contains(out, "[WORKER] 코딩봇") {
+		t.Errorf("에이전트 티어가 대문자로 표시되어야 합니다. 실제 출력: %s", out)
+	}
+}
+
+// TestPrintMessageTable_UserDisplayNamePriority는 UserDisplayName이 있을 때
+// 에이전트 이름보다 UserDisplayName을 우선 표시하는지 검증한다.
+func TestPrintMessageTable_UserDisplayNamePriority(t *testing.T) {
+	agentName := "에이전트"
+	agentTier := "worker"
+
+	messages := []MessageWithUser{
+		{
+			Message:         Message{ID: "msg-1", Content: "사람 메시지", CreatedAt: "2026-01-01T00:00:00Z"},
+			UserDisplayName: "홍길동", // UserDisplayName이 있으면 에이전트 이름 무시
+			AgentName:       &agentName,
+			AgentTier:       &agentTier,
+		},
+	}
+
+	var buf bytes.Buffer
+	printMessageTable(&buf, messages)
+
+	out := buf.String()
+	// UserDisplayName 우선
+	if !strings.Contains(out, "홍길동") {
+		t.Errorf("UserDisplayName이 있으면 에이전트 이름 대신 표시되어야 합니다. 실제 출력: %s", out)
+	}
+	// 에이전트 이름이 보이면 안 됨
+	if strings.Contains(out, "[WORKER]") {
+		t.Errorf("UserDisplayName이 있을 때 에이전트 이름이 표시되면 안 됩니다. 실제 출력: %s", out)
+	}
+}
+
+// TestPrintMessageTable_FallbackToUserID는 UserDisplayName도 AgentName도 없을 때
+// UserID를 fallback으로 사용하는지 검증한다.
+func TestPrintMessageTable_FallbackToUserID(t *testing.T) {
+	messages := []MessageWithUser{
+		{
+			Message:         Message{ID: "msg-1", Content: "내용", CreatedAt: "2026-01-01T00:00:00Z", UserID: "user-fallback-id"},
+			UserDisplayName: "",
+			AgentName:       nil,
+			AgentTier:       nil,
+		},
+	}
+
+	var buf bytes.Buffer
+	printMessageTable(&buf, messages)
+
+	out := buf.String()
+	if !strings.Contains(out, "user-fallback-id") {
+		t.Errorf("UserDisplayName과 AgentName이 모두 없으면 UserID를 표시해야 합니다. 실제 출력: %s", out)
+	}
+}
+
+// TestRunMessageAgentMessages_WithAgentInfo는 에이전트 메시지 조회 시
+// 응답의 AgentName/AgentTier 필드가 올바르게 파싱되어 표시되는지 검증한다.
+func TestRunMessageAgentMessages_WithAgentInfo(t *testing.T) {
+	agentName := "전략분석가"
+	agentTier := "c_level"
+
+	agentMessages := []MessageWithUser{
+		{
+			Message:         Message{ID: "msg-a1", Content: "전략 분석 완료", CreatedAt: "2026-01-01T00:00:00Z"},
+			UserDisplayName: "",
+			AgentName:       &agentName,
+			AgentTier:       &agentTier,
+		},
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/channels/ch-1/agent-messages" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buildAPIResponse(messageListResponse{Messages: agentMessages}))
+	}))
+	defer srv.Close()
+
+	client := makeTestClient(srv.URL, "ws-1")
+	var buf bytes.Buffer
+
+	err := runMessageAgentMessages(client, &buf, "ch-1", false)
+	if err != nil {
+		t.Fatalf("runMessageAgentMessages 오류: %v", err)
+	}
+
+	out := buf.String()
+	// "[C_LEVEL] 전략분석가" 형식으로 표시되어야 한다
+	if !strings.Contains(out, "[C_LEVEL] 전략분석가") {
+		t.Errorf("에이전트 작성자가 '[C_LEVEL] 전략분석가' 형식으로 표시되어야 합니다. 실제 출력: %s", out)
+	}
+}
+
 func TestRunMessageContentTruncation(t *testing.T) {
 	// 80자 초과 콘텐츠는 잘려야 합니다
 	longContent := strings.Repeat("A", 100)
