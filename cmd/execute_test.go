@@ -3,9 +3,12 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/insajin/autopus-bridge/internal/mcpserver"
 )
@@ -297,6 +300,79 @@ func TestFetchStreamExecutionSummary(t *testing.T) {
 	}
 	if status.Status != "completed" {
 		t.Fatalf("status = %q, want %q", status.Status, "completed")
+	}
+}
+
+func TestRecordExecutionStatus_PreservesExistingStatusAndIncrementsCompleted(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	startTime := time.Now().Add(-time.Minute)
+	initial := &StatusInfo{
+		Connected:      true,
+		ServerURL:      "wss://api.autopus.co/ws/agent",
+		StartTime:      &startTime,
+		TasksCompleted: 2,
+		TasksFailed:    1,
+		PID:            1234,
+		WorkspaceID:    "ws-1",
+	}
+	if err := SaveStatus(initial); err != nil {
+		t.Fatalf("SaveStatus() error = %v", err)
+	}
+
+	if err := recordExecutionStatus("ws-1", "completed"); err != nil {
+		t.Fatalf("recordExecutionStatus() error = %v", err)
+	}
+
+	data, err := os.ReadFile(getScopedStatusFilePath("ws-1"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var got StatusInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if !got.Connected {
+		t.Fatal("Connected = false, want true")
+	}
+	if got.PID != 1234 {
+		t.Fatalf("PID = %d, want %d", got.PID, 1234)
+	}
+	if got.TasksCompleted != 3 {
+		t.Fatalf("TasksCompleted = %d, want %d", got.TasksCompleted, 3)
+	}
+	if got.TasksFailed != 1 {
+		t.Fatalf("TasksFailed = %d, want %d", got.TasksFailed, 1)
+	}
+}
+
+func TestRecordExecutionStatus_CreatesStatusFileForFailures(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if err := recordExecutionStatus("ws-2", "failed"); err != nil {
+		t.Fatalf("recordExecutionStatus() error = %v", err)
+	}
+
+	data, err := os.ReadFile(getScopedStatusFilePath("ws-2"))
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+
+	var got StatusInfo
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if got.WorkspaceID != "ws-2" {
+		t.Fatalf("WorkspaceID = %q, want %q", got.WorkspaceID, "ws-2")
+	}
+	if got.TasksCompleted != 0 {
+		t.Fatalf("TasksCompleted = %d, want %d", got.TasksCompleted, 0)
+	}
+	if got.TasksFailed != 1 {
+		t.Fatalf("TasksFailed = %d, want %d", got.TasksFailed, 1)
 	}
 }
 

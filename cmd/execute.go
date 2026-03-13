@@ -194,6 +194,12 @@ func runExecute(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	if executeWait {
+		if err := recordExecutionStatus(workspaceID, output.Status); err != nil {
+			fmt.Fprintf(cmd.ErrOrStderr(), "경고: 상태 파일 업데이트 실패: %v\n", err)
+		}
+	}
+
 	if err := printExecuteOutput(output); err != nil {
 		return err
 	}
@@ -206,6 +212,30 @@ func runExecute(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func recordExecutionStatus(workspaceID, status string) error {
+	if !isTerminalExecutionStatus(status) {
+		return nil
+	}
+
+	info := &StatusInfo{WorkspaceID: workspaceID}
+	statusFile := getScopedStatusFilePath(workspaceID)
+	if data, err := os.ReadFile(statusFile); err == nil {
+		var existing StatusInfo
+		if unmarshalErr := json.Unmarshal(data, &existing); unmarshalErr == nil {
+			info = &existing
+		}
+	}
+
+	info.WorkspaceID = workspaceID
+	if isFailedExecutionStatus(status) {
+		info.TasksFailed++
+	} else {
+		info.TasksCompleted++
+	}
+
+	return SaveStatus(info)
 }
 
 func validateExecuteMode() error {

@@ -387,6 +387,8 @@ func TestRunWorkspaceUpdateRole(t *testing.T) {
 }
 
 func TestRunWorkspaceSwitch(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
 	workspaces := []Workspace{
 		{ID: "ws-1", Name: "Alpha", Slug: "alpha"},
 		{ID: "ws-2", Name: "Beta", Slug: "beta"},

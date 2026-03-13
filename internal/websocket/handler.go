@@ -58,6 +58,13 @@ type CLIExecutor interface {
 	Execute(ctx context.Context, req *ws.CLIRequestPayload) *ws.CLIResultPayload
 }
 
+// TaskMessageSender sends task lifecycle messages back to the server.
+type TaskMessageSender interface {
+	SendTaskProgress(payload ws.TaskProgressPayload) error
+	SendTaskResult(payload ws.TaskResultPayload) error
+	SendTaskError(payload ws.TaskErrorPayload) error
+}
+
 // ProjectAnalyzer는 프로젝트 기술 스택 분석을 담당하는 인터페이스입니다 (SPEC-SKILL-V2-001 Block A).
 type ProjectAnalyzer interface {
 	Analyze(rootDir string) (*ws.ProjectContextPayload, error)
@@ -93,6 +100,8 @@ type Router struct {
 	client *Client
 	// executor는 작업 실행기입니다.
 	executor TaskExecutor
+	// taskSender는 task_request 수명주기 메시지 전송을 담당합니다.
+	taskSender TaskMessageSender
 	// buildExecutor는 빌드 실행기입니다 (FR-P3-01).
 	buildExecutor BuildExecutor
 	// testExecutor는 테스트 실행기입니다 (FR-P3-02).
@@ -130,6 +139,13 @@ type RouterOption func(*Router)
 func WithTaskExecutor(executor TaskExecutor) RouterOption {
 	return func(r *Router) {
 		r.executor = executor
+	}
+}
+
+// WithTaskMessageSender sets the sender for task_request progress/result/error messages.
+func WithTaskMessageSender(sender TaskMessageSender) RouterOption {
+	return func(r *Router) {
+		r.taskSender = sender
 	}
 }
 
@@ -323,7 +339,7 @@ func (r *Router) handleTaskRequest(ctx context.Context, msg ws.AgentMessage) err
 			Message:     fmt.Sprintf("작업 요청 페이로드 파싱 실패: %v", err),
 			Retryable:   false,
 		}
-		return r.client.SendTaskError(errPayload)
+		return r.getTaskSender().SendTaskError(errPayload)
 	}
 
 	// FR-P2-04: 태스크 추적 시작
@@ -338,7 +354,7 @@ func (r *Router) handleTaskRequest(ctx context.Context, msg ws.AgentMessage) err
 			Message:     "작업 실행기가 설정되지 않았습니다",
 			Retryable:   false,
 		}
-		return r.client.SendTaskError(errPayload)
+		return r.getTaskSender().SendTaskError(errPayload)
 	}
 
 	// 비동기로 작업 실행
@@ -349,11 +365,13 @@ func (r *Router) handleTaskRequest(ctx context.Context, msg ws.AgentMessage) err
 
 // executeTask는 작업을 실행하고 결과를 전송합니다.
 func (r *Router) executeTask(ctx context.Context, task ws.TaskRequestPayload) {
+	sender := r.getTaskSender()
+
 	// FR-P2-04: 작업 완료 시 추적 목록에서 제거
 	defer r.client.TaskTracker().Complete(task.ExecutionID)
 
 	// 진행 상황 전송: 시작
-	_ = r.client.SendTaskProgress(ws.TaskProgressPayload{
+	_ = sender.SendTaskProgress(ws.TaskProgressPayload{
 		ExecutionID: task.ExecutionID,
 		Progress:    0,
 		Message:     "작업 시작",
@@ -376,12 +394,19 @@ func (r *Router) executeTask(ctx context.Context, task ws.TaskRequestPayload) {
 			Message:     err.Error(),
 			Retryable:   isRetryableError(err),
 		}
-		_ = r.client.SendTaskError(errPayload)
+		_ = sender.SendTaskError(errPayload)
 		return
 	}
 
 	// 결과 전송
-	_ = r.client.SendTaskResult(result)
+	_ = sender.SendTaskResult(result)
+}
+
+func (r *Router) getTaskSender() TaskMessageSender {
+	if r.taskSender != nil {
+		return r.taskSender
+	}
+	return r.client
 }
 
 // handleAgentResponseRequest는 에이전트 응답 요청 메시지를 처리합니다 (SPEC-BRIDGE-GATEWAY-001).

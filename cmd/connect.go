@@ -325,10 +325,16 @@ func runConnectWithOptions(cmd *cobra.Command, args []string, opts connectRunOpt
 		}
 	})
 
-	// 작업 실행기 생성 (client를 sender로 사용)
+	// 작업 실행기 생성 (전송 시점에 상태 파일도 함께 갱신)
+	taskSender := &statusTrackingTaskSender{
+		sender:    client,
+		connState: NewConnectionState(),
+	}
+	taskSender.connState.SetWorkspaceID(connectWorkspaceID)
+
 	taskExecutor := executor.NewTaskExecutor(
 		registry,
-		client,
+		taskSender,
 		executor.WithLogger(log.Logger),
 	)
 
@@ -345,6 +351,7 @@ func runConnectWithOptions(cmd *cobra.Command, args []string, opts connectRunOpt
 	router := websocket.NewRouter(
 		client,
 		websocket.WithTaskExecutor(taskExecutor),
+		websocket.WithTaskMessageSender(taskSender),
 		websocket.WithMCPStarter(mcpAdapter),
 		websocket.WithComputerUseHandler(cuHandler),
 		websocket.WithErrorHandler(func(err error) {
@@ -372,8 +379,7 @@ func runConnectWithOptions(cmd *cobra.Command, args []string, opts connectRunOpt
 	}
 
 	// 연결 상태 추적
-	connState := NewConnectionState()
-	connState.SetWorkspaceID(connectWorkspaceID)
+	connState := taskSender.connState
 
 	// 연결 및 실행 루프
 	var wg sync.WaitGroup
@@ -927,6 +933,50 @@ func clearConnectionStatus() {
 	if err := ClearStatus(); err != nil {
 		logger.Warn().Err(err).Msg("상태 파일 삭제 실패")
 	}
+}
+
+type statusTrackingTaskSender struct {
+	sender    executor.TaskSender
+	connState *ConnectionState
+}
+
+func (s *statusTrackingTaskSender) SendTaskProgress(payload ws.TaskProgressPayload) error {
+	if err := s.sender.SendTaskProgress(payload); err != nil {
+		return err
+	}
+	if payload.ExecutionID != "" && payload.Progress == 0 {
+		s.connState.SetCurrentTaskID(payload.ExecutionID)
+		saveConnectionStatus(s.connState)
+	}
+	return nil
+}
+
+func (s *statusTrackingTaskSender) SendTaskResult(payload ws.TaskResultPayload) error {
+	if err := s.sender.SendTaskResult(payload); err != nil {
+		return err
+	}
+	s.connState.IncrementTasksCompleted()
+	if s.connState.CurrentTaskID() == payload.ExecutionID {
+		s.connState.SetCurrentTaskID("")
+	}
+	saveConnectionStatus(s.connState)
+	return nil
+}
+
+func (s *statusTrackingTaskSender) SendTaskError(payload ws.TaskErrorPayload) error {
+	if err := s.sender.SendTaskError(payload); err != nil {
+		return err
+	}
+	s.connState.IncrementTasksFailed()
+	if s.connState.CurrentTaskID() == payload.ExecutionID {
+		s.connState.SetCurrentTaskID("")
+	}
+	saveConnectionStatus(s.connState)
+	return nil
+}
+
+func (s *statusTrackingTaskSender) SetLastExecID(execID string) {
+	s.sender.SetLastExecID(execID)
 }
 
 // acquireConnectLock은 connect.lock을 생성해 connect 단일 인스턴스를 보장합니다.

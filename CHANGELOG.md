@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.22.1] - 2026-03-13
+
+### Fixed
+
+- `execute --wait` 완료/실패 결과가 워크스페이스 상태 파일의 `tasks_completed`, `tasks_failed` 카운터에 반영되지 않던 문제 수정
+- WebSocket `task_request` 실행 완료/실패가 `status` 작업 통계에 반영되지 않던 문제 수정
+- `go test ./cmd/...` 실행 중 `workspace switch` 테스트가 실제 `~/.config/autopus/credentials.json`을 덮어쓸 수 있던 테스트 오염 문제 수정
+
 ## [1.22.0] - 2026-03-13
 
 ### Added

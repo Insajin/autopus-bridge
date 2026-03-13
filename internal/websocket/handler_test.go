@@ -14,6 +14,40 @@ import (
 	"github.com/insajin/autopus-agent-protocol"
 )
 
+type stubTaskExecutor struct {
+	result ws.TaskResultPayload
+	err    error
+}
+
+func (s *stubTaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) (ws.TaskResultPayload, error) {
+	return s.result, s.err
+}
+
+func (s *stubTaskExecutor) ExecuteAgentResponse(ctx context.Context, req ws.AgentResponseRequestPayload) (ws.AgentResponseCompletePayload, error) {
+	return ws.AgentResponseCompletePayload{}, nil
+}
+
+type stubTaskMessageSender struct {
+	progress []ws.TaskProgressPayload
+	results  []ws.TaskResultPayload
+	errors   []ws.TaskErrorPayload
+}
+
+func (s *stubTaskMessageSender) SendTaskProgress(payload ws.TaskProgressPayload) error {
+	s.progress = append(s.progress, payload)
+	return nil
+}
+
+func (s *stubTaskMessageSender) SendTaskResult(payload ws.TaskResultPayload) error {
+	s.results = append(s.results, payload)
+	return nil
+}
+
+func (s *stubTaskMessageSender) SendTaskError(payload ws.TaskErrorPayload) error {
+	s.errors = append(s.errors, payload)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // Tests: Computer Use Handler Routing (SPEC-COMPUTER-USE-001)
 // ---------------------------------------------------------------------------
@@ -337,6 +371,55 @@ func TestWithComputerUseHandler_Option(t *testing.T) {
 	}
 }
 
+func TestHandleTaskRequest_UsesCustomTaskSender(t *testing.T) {
+	client := NewClient("ws://localhost:9999/ws", "test-token", "1.0.0")
+	taskSender := &stubTaskMessageSender{}
+	router := NewRouter(
+		client,
+		WithTaskExecutor(&stubTaskExecutor{
+			result: ws.TaskResultPayload{
+				ExecutionID: "exec-1",
+				Output:      "done",
+			},
+		}),
+		WithTaskMessageSender(taskSender),
+	)
+
+	payload, err := json.Marshal(ws.TaskRequestPayload{
+		ExecutionID: "exec-1",
+		Prompt:      "hello",
+	})
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	msg := ws.AgentMessage{
+		Type:      ws.AgentMsgTaskReq,
+		ID:        "msg-task-1",
+		Timestamp: time.Now(),
+		Payload:   payload,
+	}
+
+	if err := router.HandleMessage(context.Background(), msg); err != nil {
+		t.Fatalf("HandleMessage() error = %v", err)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for len(taskSender.results) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if len(taskSender.progress) == 0 {
+		t.Fatal("expected progress message")
+	}
+	if len(taskSender.results) != 1 {
+		t.Fatalf("len(results) = %d, want 1", len(taskSender.results))
+	}
+	if got := taskSender.results[0].ExecutionID; got != "exec-1" {
+		t.Fatalf("result.ExecutionID = %q, want %q", got, "exec-1")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Tests: isRetryableError 에러 분류기
 // ---------------------------------------------------------------------------
@@ -347,7 +430,7 @@ type mockRetryableError struct {
 	retryable bool
 }
 
-func (e *mockRetryableError) Error() string    { return e.msg }
+func (e *mockRetryableError) Error() string     { return e.msg }
 func (e *mockRetryableError) IsRetryable() bool { return e.retryable }
 
 // mockNetError는 net.Error 인터페이스를 구현하는 테스트용 에러입니다.
