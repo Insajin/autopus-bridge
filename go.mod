@@ -2,6 +2,10 @@ module github.com/insajin/autopus-bridge
 
 go 1.25
 
+replace github.com/insajin/autopus-agent-protocol => ./third_party/autopus-agent-protocol
+
+replace github.com/insajin/autopus-codex-rpc => ./third_party/autopus-codex-rpc
+
 require (
 	github.com/anthropics/anthropic-sdk-go v1.20.0
 	github.com/charmbracelet/bubbletea v1.3.10
