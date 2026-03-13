@@ -3,6 +3,7 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -58,6 +59,12 @@ func (r *TokenRefresher) GetToken() (string, error) {
 	}
 
 	if err := RefreshAccessToken(r.creds); err != nil {
+		// refresh token 자체가 만료된 경우 디스크에서 최신 credentials 로드 후 재시도
+		if errors.Is(err, ErrRefreshTokenExpired) {
+			if reauthed := r.tryReloadCredentials(); reauthed {
+				return r.creds.AccessToken, nil
+			}
+		}
 		return "", fmt.Errorf("토큰 갱신 실패: %w", err)
 	}
 
@@ -119,6 +126,38 @@ func (r *TokenRefresher) nextRefreshDuration() time.Duration {
 	return refreshAt
 }
 
+// tryReloadCredentials는 디스크에서 최신 credentials를 로드하여 갱신을 재시도합니다.
+// WebSocket 연결이 refresh token을 갱신했을 경우를 처리합니다.
+// 호출자가 r.mu.Lock()을 보유한 상태에서 호출해야 합니다.
+// 재시도 성공 시 true를 반환합니다.
+func (r *TokenRefresher) tryReloadCredentials() bool {
+	diskCreds, err := Load()
+	if err != nil || diskCreds == nil {
+		r.logger.Warn("디스크 credentials 로드 실패: 재인증 불가", "error", err)
+		return false
+	}
+
+	// 디스크의 refresh token이 현재와 다르면 WebSocket이 갱신한 것으로 판단
+	if diskCreds.RefreshToken == r.creds.RefreshToken {
+		// 동일한 refresh token이므로 재시도해도 의미 없음
+		return false
+	}
+
+	r.logger.Info("디스크에서 새 refresh token 발견, 재갱신 시도")
+
+	// 디스크 credentials로 교체 후 재시도
+	*r.creds = *diskCreds
+	if retryErr := RefreshAccessToken(r.creds); retryErr != nil {
+		r.logger.Error("재갱신 실패: 수동 재로그인 필요 ('autopus login' 명령 실행)", "error", retryErr)
+		return false
+	}
+
+	r.logger.Info("디스크 credentials 기반 토큰 갱신 성공",
+		"expires_at", r.creds.ExpiresAt.Format(time.RFC3339),
+	)
+	return true
+}
+
 // refreshToken은 토큰 갱신을 시도합니다.
 func (r *TokenRefresher) refreshToken() {
 	r.mu.Lock()
@@ -140,6 +179,14 @@ func (r *TokenRefresher) refreshToken() {
 	}
 
 	if err := RefreshAccessToken(r.creds); err != nil {
+		// refresh token 자체가 만료된 경우 디스크에서 최신 credentials 로드 후 재시도
+		if errors.Is(err, ErrRefreshTokenExpired) {
+			if reauthed := r.tryReloadCredentials(); reauthed {
+				return
+			}
+			r.logger.Error("refresh token 만료: 수동 재로그인 필요 ('autopus login' 명령 실행)", "error", err)
+			return
+		}
 		r.logger.Error("백그라운드 토큰 갱신 실패", "error", err)
 		return
 	}
