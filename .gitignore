@@ -2,6 +2,12 @@ mcp-server
 autopus-bridge
 autopus-bridge-test
 autopus-bridge-latest
+.claude/
+cmd.test
+cover_logs.out
+cover_logs2.out
+coverage.out
+coverage_sync.out
 *.exe
 dist/
 .moai/
