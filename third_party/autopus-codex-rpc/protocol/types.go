@@ -145,8 +145,8 @@ type TurnStartResult struct {
 type TurnInput struct {
 	// Type은 입력 타입이다 ("text", "image", "skill").
 	Type string `json:"type"`
-	// Text는 입력 텍스트이다.
-	Text string `json:"text,omitempty"`
+	// Text는 입력 텍스트이다. Codex v0.114.0은 text 필드를 필수로 요구한다.
+	Text string `json:"text"`
 }
 
 // TurnCompletedParams는 turn/completed 알림 파라미터이다.
