@@ -5,13 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [1.22.1] - 2026-03-13
+## [1.22.3] - 2026-03-13
 
 ### Fixed
 
-- `execute --wait` 완료/실패 결과가 워크스페이스 상태 파일의 `tasks_completed`, `tasks_failed` 카운터에 반영되지 않던 문제 수정
-- WebSocket `task_request` 실행 완료/실패가 `status` 작업 통계에 반영되지 않던 문제 수정
-- `go test ./cmd/...` 실행 중 `workspace switch` 테스트가 실제 `~/.config/autopus/credentials.json`을 덮어쓸 수 있던 테스트 오염 문제 수정
+- Homebrew cask 생성물에 불필요한 `url.verified`가 포함되어 `brew audit --strict`가 실패하던 문제 수정
 
 ## [1.22.2] - 2026-03-13
 
@@ -21,6 +19,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Homebrew formula 생성 경로를 deprecated `brews`에서 `homebrew_casks`로 마이그레이션
 - `autopus-mcp-server` 릴리스 바이너리에 `buildDate` ldflags가 정상 반영되도록 메타데이터 변수명 수정
 - README Homebrew 설치 예시를 실제 릴리스 탭 경로와 cask 설치 방식에 맞게 정리
+
+## [1.22.1] - 2026-03-13
+
+### Fixed
+
+- `execute --wait` 완료/실패 결과가 워크스페이스 상태 파일의 `tasks_completed`, `tasks_failed` 카운터에 반영되지 않던 문제 수정
+- WebSocket `task_request` 실행 완료/실패가 `status` 작업 통계에 반영되지 않던 문제 수정
+- `go test ./cmd/...` 실행 중 `workspace switch` 테스트가 실제 `~/.config/autopus/credentials.json`을 덮어쓸 수 있던 테스트 오염 문제 수정
 
 ## [1.22.0] - 2026-03-13
 
