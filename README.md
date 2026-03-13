@@ -13,7 +13,7 @@ go install github.com/insajin/autopus-bridge@latest
 ### Homebrew
 
 ```bash
-brew install autopus/tap/autopus-bridge
+brew install --cask insajin/tap/autopus-bridge
 ```
 
 ### Binary Download

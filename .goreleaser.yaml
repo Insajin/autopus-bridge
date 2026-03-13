@@ -45,7 +45,7 @@ builds:
 archives:
   # autopus-bridge 아카이브
   - id: autopus-bridge
-    builds:
+    ids:
       - autopus-bridge
     formats:
       - tar.gz
@@ -57,7 +57,7 @@ archives:
 
   # autopus-mcp-server 아카이브
   - id: autopus-mcp-server
-    builds:
+    ids:
       - autopus-mcp-server
     formats:
       - tar.gz
@@ -78,8 +78,8 @@ changelog:
       - '^test:'
       - '^ci:'
 
-brews:
-  # autopus-bridge Homebrew 포뮬러
+homebrew_casks:
+  # autopus-bridge Homebrew cask
   - ids:
       - autopus-bridge
     repository:
@@ -88,13 +88,18 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/insajin/autopus-bridge
     description: "Autopus Local Agent Bridge - Connect local development agents to Autopus platform"
-    license: "MIT"
-    install: |
-      bin.install "autopus-bridge"
-    test: |
-      system "#{bin}/autopus-bridge", "version"
+    binaries:
+      - autopus-bridge
+    url:
+      verified: "github.com/Insajin/autopus-bridge/"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/autopus-bridge"]
+          end
 
-  # autopus-mcp-server Homebrew 포뮬러
+  # autopus-mcp-server Homebrew cask
   - ids:
       - autopus-mcp-server
     name: autopus-mcp-server
@@ -104,8 +109,13 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/insajin/autopus-bridge
     description: "Autopus MCP Server - Claude Code MCP plugin for Autopus platform integration"
-    license: "MIT"
-    install: |
-      bin.install "autopus-mcp-server"
-    test: |
-      assert_predicate bin/"autopus-mcp-server", :exist?
+    binaries:
+      - autopus-mcp-server
+    url:
+      verified: "github.com/Insajin/autopus-bridge/"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/autopus-mcp-server"]
+          end

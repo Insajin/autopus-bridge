@@ -28,9 +28,9 @@ import (
 
 // 빌드 시 ldflags로 주입되는 버전 정보
 var (
-	version = "dev"
-	commit  = "none"
-	date    = "unknown"
+	version   = "dev"
+	commit    = "none"
+	buildDate = "unknown"
 )
 
 func main() {
@@ -55,7 +55,7 @@ func run() error {
 
 	logger.Info().
 		Str("commit", commit).
-		Str("date", date).
+		Str("date", buildDate).
 		Msg("Autopus MCP 서버를 시작합니다...")
 
 	// 1. 인증 정보 로드
