@@ -580,6 +580,16 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 
 	// 4. 알림 핸들러 등록
 	turnDone := make(chan struct{})
+	// sync.Once로 turnDone 채널을 한 번만 닫는다.
+	// 구버전(turn/completed)과 신버전(codex/event/task_complete) 이벤트가 모두 도달할 수 있으므로
+	// 중복 close로 인한 패닉을 방지한다.
+	var turnDoneOnce sync.Once
+	closeTurnDone := func() {
+		turnDoneOnce.Do(func() {
+			close(turnDone)
+		})
+	}
+
 	var toolCalls []ToolCall
 	var mu sync.Mutex // outputBuilder와 toolCalls 보호용 뮤텍스
 	var outputBuilder strings.Builder
@@ -590,30 +600,103 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		accumulator = NewStreamAccumulator()
 	}
 
-	// 에이전트 메시지 델타 핸들러 (공유 프로토콜: AgentMessageDelta.Delta)
-	rpcClient.OnNotification(protocol.MethodAgentMessageDelta, func(method string, params json.RawMessage) {
-		var delta protocol.AgentMessageDelta
-		if err := json.Unmarshal(params, &delta); err != nil {
-			p.logger.Warn().Err(err).Msg("에이전트 메시지 델타 파싱 실패")
+	// appendDelta는 텍스트 증분을 outputBuilder에 추가하고 스트리밍 콜백을 처리한다.
+	// 구버전/신버전 이벤트 핸들러가 공통으로 사용한다.
+	appendDelta := func(text string) {
+		if text == "" {
 			return
 		}
-
 		mu.Lock()
-		outputBuilder.WriteString(delta.Delta)
+		outputBuilder.WriteString(text)
 		mu.Unlock()
 
 		// 스트리밍 콜백 처리 (StreamAccumulator는 자체 뮤텍스 보유)
 		if onDelta != nil && accumulator != nil {
-			accumulator.Add(delta.Delta)
+			accumulator.Add(text)
 			if accumulator.ShouldFlush() {
 				flushed := accumulator.Flush()
 				onDelta(flushed, accumulator.GetAccumulated())
 			}
 		}
+	}
+
+	// 에이전트 메시지 델타 핸들러 — 구버전: item/agentMessage/delta
+	// (공유 프로토콜: AgentMessageDelta.Delta)
+	rpcClient.OnNotification(protocol.MethodAgentMessageDelta, func(method string, params json.RawMessage) {
+		var delta protocol.AgentMessageDelta
+		if err := json.Unmarshal(params, &delta); err != nil {
+			p.logger.Warn().Err(err).Msg("에이전트 메시지 델타 파싱 실패 (구버전)")
+			return
+		}
+		appendDelta(delta.Delta)
+	})
+
+	// 에이전트 메시지 델타 핸들러 — 신버전: codex/event/agent_message_delta
+	// delta 필드를 우선 사용하고, 없으면 content 필드를 시도한다.
+	rpcClient.OnNotification(protocol.MethodCodexAgentMessageDelta, func(method string, params json.RawMessage) {
+		var raw struct {
+			Delta   string `json:"delta"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(params, &raw); err != nil {
+			p.logger.Warn().Err(err).Msg("에이전트 메시지 델타 파싱 실패 (codex/event/agent_message_delta)")
+			return
+		}
+		text := raw.Delta
+		if text == "" {
+			text = raw.Content
+		}
+		appendDelta(text)
+	})
+
+	// 에이전트 메시지 콘텐츠 델타 핸들러 — 신버전: codex/event/agent_message_content_delta
+	// delta 필드를 우선 사용하고, 없으면 content 필드를 시도한다.
+	rpcClient.OnNotification(protocol.MethodCodexAgentMessageContentDelta, func(method string, params json.RawMessage) {
+		var raw struct {
+			Delta   string `json:"delta"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(params, &raw); err != nil {
+			p.logger.Warn().Err(err).Msg("에이전트 메시지 콘텐츠 델타 파싱 실패 (codex/event/agent_message_content_delta)")
+			return
+		}
+		text := raw.Delta
+		if text == "" {
+			text = raw.Content
+		}
+		appendDelta(text)
+	})
+
+	// 완성된 에이전트 메시지 핸들러 — 신버전: codex/event/agent_message
+	// 모든 델타 이후 전체 텍스트를 포함하여 도달한다. 델타 누적과 중복을 피하기 위해
+	// 현재 outputBuilder 내용이 비어있을 때만 반영한다.
+	rpcClient.OnNotification(protocol.MethodCodexAgentMessage, func(method string, params json.RawMessage) {
+		var raw struct {
+			Text    string `json:"text"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal(params, &raw); err != nil {
+			p.logger.Warn().Err(err).Msg("완성된 에이전트 메시지 파싱 실패 (codex/event/agent_message)")
+			return
+		}
+		text := raw.Text
+		if text == "" {
+			text = raw.Content
+		}
+		if text == "" {
+			return
+		}
+		// 델타 누적이 없었던 경우에만 전체 메시지를 사용한다.
+		mu.Lock()
+		if outputBuilder.Len() == 0 {
+			outputBuilder.WriteString(text)
+		}
+		mu.Unlock()
 	})
 
 	// 아이템 완료 핸들러 (commandExecution, mcpToolCall, dynamicToolCall 등)
-	rpcClient.OnNotification(protocol.MethodItemCompleted, func(method string, params json.RawMessage) {
+	// 구버전: item/completed — handleItemCompleted 로직을 함수로 분리하여 재사용한다.
+	handleItemCompleted := func(method string, params json.RawMessage) {
 		var item protocol.ItemCompletedParams
 		if err := json.Unmarshal(params, &item); err != nil {
 			p.logger.Warn().Err(err).Msg("아이템 완료 파싱 실패")
@@ -675,7 +758,12 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 			})
 			mu.Unlock()
 		}
-	})
+	}
+
+	// 구버전: item/completed 핸들러 등록
+	rpcClient.OnNotification(protocol.MethodItemCompleted, handleItemCompleted)
+	// 신버전: codex/event/item_completed 핸들러 등록 (v0.114.0+ 하위 호환)
+	rpcClient.OnNotification(protocol.MethodCodexItemCompleted, handleItemCompleted)
 
 	// item/tool/call 요청 핸들러 등록 (서버 -> 클라이언트 요청, id 있음)
 	// 서버가 동적 도구 실행을 요청할 때 호출된다.
@@ -772,9 +860,16 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		}
 	})
 
-	// Turn 완료 핸들러
+	// Turn 완료 핸들러 — 구버전: turn/completed
+	// sync.Once를 통해 turnDone 채널을 안전하게 한 번만 닫는다.
 	rpcClient.OnNotification(protocol.MethodTurnCompleted, func(method string, params json.RawMessage) {
-		close(turnDone)
+		closeTurnDone()
+	})
+
+	// Turn 완료 핸들러 — 신버전: codex/event/task_complete (v0.114.0+)
+	// 구버전과 신버전 이벤트가 동시에 도달할 수 있으므로 sync.Once로 보호한다.
+	rpcClient.OnNotification(protocol.MethodCodexTaskComplete, func(method string, params json.RawMessage) {
+		closeTurnDone()
 	})
 
 	// 5. turn/start 호출

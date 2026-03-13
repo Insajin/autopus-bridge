@@ -42,4 +42,30 @@ const (
 
 	// MethodToolCall은 서버가 클라이언트에게 동적 도구 실행을 요청할 때 사용하는 메서드이다 (서버 -> 클라이언트 요청).
 	MethodToolCall = "item/tool/call"
+
+	// --- Codex v0.114.0 새 이벤트 메서드 (codex/event/* 네임스페이스) ---
+
+	// MethodCodexAgentMessageDelta는 에이전트 메시지 증분 이벤트이다 (v0.114.0+).
+	// item/agentMessage/delta의 새 이름.
+	MethodCodexAgentMessageDelta = "codex/event/agent_message_delta"
+
+	// MethodCodexAgentMessageContentDelta는 에이전트 메시지 콘텐츠 증분 이벤트이다 (v0.114.0+).
+	// delta 또는 content 필드에 텍스트가 담겨 온다.
+	MethodCodexAgentMessageContentDelta = "codex/event/agent_message_content_delta"
+
+	// MethodCodexAgentMessage는 완성된 에이전트 메시지 이벤트이다 (v0.114.0+).
+	// 모든 델타가 도착한 뒤 전체 텍스트를 포함하여 발행된다.
+	MethodCodexAgentMessage = "codex/event/agent_message"
+
+	// MethodCodexItemCompleted는 아이템 완료 이벤트이다 (v0.114.0+).
+	// item/completed의 새 이름.
+	MethodCodexItemCompleted = "codex/event/item_completed"
+
+	// MethodCodexItemStarted는 아이템 시작 이벤트이다 (v0.114.0+).
+	// item/started의 새 이름.
+	MethodCodexItemStarted = "codex/event/item_started"
+
+	// MethodCodexTaskComplete는 Turn(태스크) 완료 이벤트이다 (v0.114.0+).
+	// turn/completed의 새 이름.
+	MethodCodexTaskComplete = "codex/event/task_complete"
 )
