@@ -134,7 +134,13 @@ func (p *ClaudeCLIProvider) Supports(model string) bool {
 }
 
 // Execute는 claude CLI를 통해 프롬프트를 실행하고 결과를 반환합니다.
+// ResponseMode가 "tool_loop"인 경우 프롬프트 기반 도구 호출 시뮬레이션을 사용합니다.
 func (p *ClaudeCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	// tool_loop 모드: 도구 정의와 형식 지침을 시스템 프롬프트와 메인 프롬프트에 분리하여 전달
+	if req.ResponseMode == "tool_loop" {
+		return p.executeToolLoopViaCLI(ctx, req)
+	}
+
 	startTime := time.Now()
 
 	// 모델 결정
@@ -277,6 +283,31 @@ func (p *ClaudeCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*E
 		Model:      model,
 		StopReason: "end_turn",
 	}, nil
+}
+
+// executeToolLoopViaCLI는 tool_loop 모드 요청을 Claude CLI 프롬프트 기반 시뮬레이션으로 처리합니다.
+// Claude CLI는 --system-prompt 플래그를 지원하므로 도구 정의를 시스템 프롬프트에 포함합니다.
+func (p *ClaudeCLIProvider) executeToolLoopViaCLI(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	// 메인 프롬프트와 시스템 프롬프트를 분리하여 구성
+	mainPrompt, systemPrompt := buildToolLoopPromptForClaude(req)
+
+	// 일반 실행으로 위임 (ResponseMode 제거로 재귀 방지)
+	cliReq := ExecuteRequest{
+		Prompt:       mainPrompt,
+		Model:        req.Model,
+		MaxTokens:    req.MaxTokens,
+		WorkDir:      req.WorkDir,
+		SystemPrompt: systemPrompt,
+		ResponseMode: "", // 재귀 방지
+	}
+
+	resp, err := p.Execute(ctx, cliReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// 출력에서 도구 호출 파싱
+	return wrapToolLoopResponse(resp, resp.Output), nil
 }
 
 // StreamCallback은 스트리밍 중 텍스트 델타가 발생할 때 호출되는 콜백입니다.

@@ -8,7 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -176,6 +176,7 @@ func (p *CodexProvider) Supports(model string) bool {
 
 // Execute는 프롬프트를 실행하고 결과를 반환합니다.
 func (p *CodexProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	log.Printf("[codex] Execute called: mode=%s model=%s tool_defs=%d", req.ResponseMode, req.Model, len(req.ToolDefinitions))
 	if req.ResponseMode == "tool_loop" {
 		return p.executeToolLoop(ctx, req)
 	}
@@ -293,6 +294,7 @@ func (p *CodexProvider) Execute(ctx context.Context, req ExecuteRequest) (*Execu
 }
 
 func (p *CodexProvider) executeToolLoop(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	log.Printf("[codex] executeToolLoop ENTERED: model=%s tool_defs=%d msgs=%d", req.Model, len(req.ToolDefinitions), len(req.ToolLoopMessages))
 	startTime := time.Now()
 
 	model := StripProviderPrefix(req.Model)
@@ -315,7 +317,7 @@ func (p *CodexProvider) executeToolLoop(ctx context.Context, req ExecuteRequest)
 	for _, t := range tools {
 		toolNames = append(toolNames, t.Function.Name)
 	}
-	slog.Debug("executeToolLoop: 도구 전송", "tool_count", len(tools), "tool_names", toolNames)
+	log.Printf("[tool-loop] 도구 전송: tool_count=%d tool_names=%v", len(tools), toolNames)
 
 	chatReq := openAIChatRequest{
 		Model:      model,
@@ -330,7 +332,7 @@ func (p *CodexProvider) executeToolLoop(ctx context.Context, req ExecuteRequest)
 		if len(preview) > 500 {
 			preview = preview[:500]
 		}
-		slog.Debug("executeToolLoop: 요청 본문 미리보기", "body_prefix", preview)
+		log.Printf("[tool-loop] 요청 본문 미리보기: %s", preview)
 	}
 
 	chatResp, err := p.doRequest(ctx, chatReq)
@@ -354,7 +356,7 @@ func (p *CodexProvider) executeToolLoop(ctx context.Context, req ExecuteRequest)
 	}
 
 	// 디버그: 응답 tool_calls 수와 finish_reason 로깅
-	slog.Debug("executeToolLoop: 응답 수신", "tool_calls_count", len(toolCalls), "finish_reason", stopReason)
+	log.Printf("[tool-loop] 응답 수신: tool_calls_count=%d finish_reason=%s output_preview=%.200s", len(toolCalls), stopReason, outputText)
 
 	tokenUsage := TokenUsage{
 		InputTokens:  chatResp.Usage.PromptTokens,

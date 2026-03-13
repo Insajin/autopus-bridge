@@ -140,7 +140,13 @@ func (p *CodexCLIProvider) Supports(model string) bool {
 }
 
 // Execute는 codex CLI를 통해 프롬프트를 실행하고 결과를 반환합니다.
+// ResponseMode가 "tool_loop"인 경우 프롬프트 기반 도구 호출 시뮬레이션을 사용합니다.
 func (p *CodexCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	// tool_loop 모드: 프롬프트에 도구 정의와 형식 지침을 포함시켜 시뮬레이션
+	if req.ResponseMode == "tool_loop" {
+		return p.executeToolLoopViaCLI(ctx, req)
+	}
+
 	startTime := time.Now()
 
 	// 모델 결정 (OpenRouter 접두사 제거)
@@ -276,6 +282,23 @@ func (p *CodexCLIProvider) Execute(ctx context.Context, req ExecuteRequest) (*Ex
 		Model:      model,
 		StopReason: "end_turn",
 	}, nil
+}
+
+// executeToolLoopViaCLI는 tool_loop 모드 요청을 CLI 프롬프트 기반 시뮬레이션으로 처리합니다.
+// 도구 정의와 대화 이력을 프롬프트에 인코딩하여 모델이 구조화된 JSON 블록으로 응답하도록 유도합니다.
+func (p *CodexCLIProvider) executeToolLoopViaCLI(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
+	// 도구 정의와 대화 이력을 단일 프롬프트로 합침
+	toolLoopReq := buildToolLoopExecuteRequest(req)
+	toolLoopReq.Model = req.Model // 모델 유지
+
+	// 일반 실행으로 위임 (재귀 방지: ResponseMode 제거됨)
+	resp, err := p.Execute(ctx, toolLoopReq)
+	if err != nil {
+		return nil, err
+	}
+
+	// 출력에서 도구 호출 파싱
+	return wrapToolLoopResponse(resp, resp.Output), nil
 }
 
 // IsCodexCLIAvailable은 codex CLI가 사용 가능한지 확인합니다.

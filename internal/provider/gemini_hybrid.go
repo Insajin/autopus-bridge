@@ -121,8 +121,23 @@ func (p *HybridGeminiProvider) Supports(model string) bool {
 }
 
 // Execute는 CLI를 우선 시도하고, 실패 시 API로 폴백합니다.
+// tool_loop 모드는 네이티브 도구 호출이 필요하므로 CLI를 건너뛰고 API로 직행합니다.
 func (p *HybridGeminiProvider) Execute(ctx context.Context, req ExecuteRequest) (*ExecuteResponse, error) {
 	startTime := time.Now()
+
+	// tool_loop 모드: CLI는 네이티브 도구 호출을 지원하지 않으므로 API로 직행
+	if req.ResponseMode == "tool_loop" && p.api != nil {
+		p.logger.Debug().
+			Str("model", req.Model).
+			Int("tool_defs", len(req.ToolDefinitions)).
+			Msg("tool_loop 모드: API로 직행 (CLI 건너뜀)")
+		resp, err := p.api.Execute(ctx, req)
+		if err != nil {
+			p.logger.Error().Err(err).Msg("tool_loop API 실행 실패")
+			return nil, err
+		}
+		return resp, nil
+	}
 
 	// CLI 우선 시도
 	if p.cli != nil {

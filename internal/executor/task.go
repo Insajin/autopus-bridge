@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -442,6 +443,7 @@ func (e *TaskExecutor) ExecuteAgentResponse(ctx context.Context, req ws.AgentRes
 
 	prov := resolution.Provider
 	execModel := resolution.Model
+	log.Printf("[agent-response] 프로바이더 해석: provider=%s model=%s source=%s tool_defs=%d mode=%s", prov.Name(), execModel, resolution.Source, len(req.ToolDefinitions), req.ResponseMode)
 
 	if req.ApprovalPolicy != "" && req.ApprovalPolicy != string(approval.ApprovalPolicyAutoExecute) {
 		if relay, ok := prov.(approval.ApprovalRelay); ok && relay.SupportsApproval() {
