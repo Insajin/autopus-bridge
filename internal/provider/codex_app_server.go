@@ -90,6 +90,10 @@ type AppServerProcess struct {
 	mu           sync.Mutex
 	running      atomic.Bool
 	logger       zerolog.Logger
+
+	// lastStderrError는 stderr에서 캡처한 마지막 에러 메시지입니다.
+	// "ERROR:" 접두사가 포함된 줄을 저장하며, 빈 응답 원인 진단에 사용됩니다.
+	lastStderrError atomic.Value // string
 }
 
 // NewAppServerProcess는 새로운 AppServerProcess를 생성합니다.
@@ -292,11 +296,30 @@ func (p *AppServerProcess) initialize(ctx context.Context) error {
 func (p *AppServerProcess) logStderr(stderr io.Reader) {
 	scanner := bufio.NewScanner(stderr)
 	for scanner.Scan() {
+		line := scanner.Text()
 		p.logger.Warn().
 			Str("source", "stderr").
-			Str("line", scanner.Text()).
+			Str("line", line).
 			Msg("App Server stderr")
+		// "ERROR:" 접두사가 포함된 줄은 프로바이더 에러로 저장
+		// 예: "ERROR: You've hit your usage limit."
+		if strings.HasPrefix(line, "ERROR:") {
+			p.lastStderrError.Store(strings.TrimSpace(strings.TrimPrefix(line, "ERROR:")))
+		}
 	}
+}
+
+// LastError는 stderr에서 캡처한 마지막 에러 메시지를 반환합니다.
+func (p *AppServerProcess) LastError() string {
+	if v := p.lastStderrError.Load(); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
+// ClearLastError는 마지막 에러 메시지를 초기화합니다.
+func (p *AppServerProcess) ClearLastError() {
+	p.lastStderrError.Store("")
 }
 
 // monitor는 프로세스 종료를 감시하는 고루틴입니다.
@@ -909,6 +932,9 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 	})
 
 	// 5. turn/start 호출
+	// 이전 턴에서 캡처된 stderr 에러를 초기화한다.
+	p.process.ClearLastError()
+
 	// tool_loop 모드일 때 대화 이력을 프롬프트에 포함한다.
 	turnPrompt := req.Prompt
 	if req.ResponseMode == "tool_loop" && len(req.ToolLoopMessages) > 0 {
@@ -945,6 +971,13 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 			Dur("timeout", turnTimeoutDur).
 			Msg("턴 타임아웃 초과")
 		return nil, fmt.Errorf("턴 타임아웃: %v 초과", turnTimeoutDur)
+	}
+
+	// 6.5. stderr에서 캡처된 프로바이더 에러 메시지 확인
+	// 예: "You've hit your usage limit..." 같은 구체적 에러가 여기에 저장됨
+	if stderrErr := p.process.LastError(); stderrErr != "" {
+		providerErrorMsg = stderrErr
+		p.logger.Warn().Str("stderr_error", stderrErr).Msg("프로바이더 stderr 에러 캡처됨")
 	}
 
 	// 7. 남은 스트리밍 데이터 플러시
