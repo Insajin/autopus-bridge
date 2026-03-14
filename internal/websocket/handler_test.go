@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,22 +29,29 @@ func (s *stubTaskExecutor) ExecuteAgentResponse(ctx context.Context, req ws.Agen
 }
 
 type stubTaskMessageSender struct {
+	mu       sync.Mutex
 	progress []ws.TaskProgressPayload
 	results  []ws.TaskResultPayload
 	errors   []ws.TaskErrorPayload
 }
 
 func (s *stubTaskMessageSender) SendTaskProgress(payload ws.TaskProgressPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.progress = append(s.progress, payload)
 	return nil
 }
 
 func (s *stubTaskMessageSender) SendTaskResult(payload ws.TaskResultPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.results = append(s.results, payload)
 	return nil
 }
 
 func (s *stubTaskMessageSender) SendTaskError(payload ws.TaskErrorPayload) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.errors = append(s.errors, payload)
 	return nil
 }
@@ -405,9 +413,18 @@ func TestHandleTaskRequest_UsesCustomTaskSender(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(2 * time.Second)
-	for len(taskSender.results) == 0 && time.Now().Before(deadline) {
+	for time.Now().Before(deadline) {
+		taskSender.mu.Lock()
+		n := len(taskSender.results)
+		taskSender.mu.Unlock()
+		if n > 0 {
+			break
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
+
+	taskSender.mu.Lock()
+	defer taskSender.mu.Unlock()
 
 	if len(taskSender.progress) == 0 {
 		t.Fatal("expected progress message")
