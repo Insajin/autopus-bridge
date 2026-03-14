@@ -379,6 +379,24 @@ func (e *TaskExecutor) Execute(ctx context.Context, task ws.TaskRequestPayload) 
 		return ws.TaskResultPayload{}, e.classifyError(execCtx, err, task.ExecutionID)
 	}
 
+	// 프로바이더가 빈 응답을 반환한 경우 에러로 처리
+	// 사용량 한도 초과 등 프로바이더 오류 시 출력 없이 완료될 수 있음
+	if resp.Output == "" && len(resp.ToolCalls) == 0 {
+		errMsg := "AI 프로바이더가 빈 응답을 반환했습니다. 프로바이더 상태를 확인해주세요."
+		if resp.Error != "" {
+			errMsg = resp.Error
+		}
+		e.logger.Warn().
+			Str("execution_id", task.ExecutionID).
+			Str("provider_error", resp.Error).
+			Msg("프로바이더 빈 응답 감지")
+		return ws.TaskResultPayload{}, &TaskError{
+			Code:      ErrorCodeProviderError,
+			Message:   errMsg,
+			Retryable: true,
+		}
+	}
+
 	// 결과 생성 (REQ-E-04)
 	result := ws.TaskResultPayload{
 		ExecutionID: task.ExecutionID,
@@ -468,6 +486,24 @@ func (e *TaskExecutor) ExecuteAgentResponse(ctx context.Context, req ws.AgentRes
 	resp, err := prov.Execute(execCtx, providerReq)
 	if err != nil {
 		return ws.AgentResponseCompletePayload{}, e.classifyError(execCtx, err, req.ExecutionID)
+	}
+
+	// 프로바이더가 빈 응답을 반환한 경우 에러로 처리
+	// 사용량 한도 초과 등 프로바이더 오류 시 출력 없이 완료될 수 있음
+	if resp.Output == "" && len(resp.ToolCalls) == 0 {
+		errMsg := "AI 프로바이더가 빈 응답을 반환했습니다. 프로바이더 상태를 확인해주세요."
+		if resp.Error != "" {
+			errMsg = resp.Error
+		}
+		e.logger.Warn().
+			Str("execution_id", req.ExecutionID).
+			Str("provider_error", resp.Error).
+			Msg("프로바이더 빈 응답 감지 (agent_response)")
+		return ws.AgentResponseCompletePayload{}, &TaskError{
+			Code:      ErrorCodeProviderError,
+			Message:   errMsg,
+			Retryable: true,
+		}
 	}
 
 	providerName := resp.Provider

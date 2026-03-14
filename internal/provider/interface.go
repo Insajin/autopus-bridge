@@ -110,6 +110,11 @@ type ExecuteResponse struct {
 	// ToolCalls는 모델이 요청한 도구 호출 목록입니다.
 	// StopReason이 "tool_use"일 때 채워집니다.
 	ToolCalls []ToolCall
+
+	// Error는 프로바이더 실행 중 발생한 사용자 대면 에러 메시지입니다.
+	// Output이 비어있고 Error가 설정된 경우, 호출자는 이 메시지를 사용자에게 전달해야 합니다.
+	// 예: 사용량 한도 초과, 인증 실패 등의 프로바이더 오류
+	Error string
 }
 
 // ToolCall은 모델이 요청한 단일 도구 호출입니다.

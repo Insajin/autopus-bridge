@@ -600,6 +600,9 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 	var toolCalls []ToolCall
 	var mu sync.Mutex // outputBuilder와 toolCalls 보호용 뮤텍스
 	var outputBuilder strings.Builder
+	// providerErrorMsg는 프로바이더가 에러 이벤트를 통해 전달한 사용자 대면 에러 메시지입니다.
+	// 빈 출력과 함께 반환될 경우 호출자에게 전달됩니다.
+	var providerErrorMsg string
 
 	// StreamAccumulator 생성 (스트리밍 모드일 때)
 	var accumulator *StreamAccumulator
@@ -984,6 +987,7 @@ func (p *CodexAppServerProvider) executeInternal(ctx context.Context, req Execut
 		Output:    output,
 		ToolCalls: resultToolCalls,
 		Model:     model,
+		Error:     providerErrorMsg,
 	}
 	if len(resultToolCalls) > 0 {
 		resp.StopReason = "tool_use"
