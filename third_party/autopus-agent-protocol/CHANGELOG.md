@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-03-13
+
+### Added
+
+- `AgentConnectPayload.WorkspaceID` 필드를 추가하여 bridge 세션을 워크스페이스 스코프로 연결 가능
+- `workspace_required` 인증 에러 코드를 추가하여 backend가 workspace-less bridge 연결을 명시적으로 거절할 수 있도록 지원
+
 ## [0.8.0] - 2026-03-06
 
 ### Added
