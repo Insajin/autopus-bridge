@@ -60,6 +60,17 @@ func NewSandbox(cfg config.SandboxConfig) *Sandbox {
 	return s
 }
 
+// AddGitWorkspacePath는 git clone 베이스 디렉토리를 허용 경로 목록에 추가합니다.
+// REQ-001.9: clone 경로 ~/.autopus/workspaces/ 를 샌드박스 허용 경로로 등록
+// REQ-006.6: Sandbox 통합 — 프로젝트 디렉토리 외부 파일 접근 차단
+func (s *Sandbox) AddGitWorkspacePath(baseDir string) {
+	if !s.enabled || baseDir == "" {
+		return
+	}
+	expanded := expandAndCleanPaths([]string{baseDir})
+	s.allowedPaths = append(s.allowedPaths, expanded...)
+}
+
 // ValidatePath는 주어진 경로가 샌드박스 정책을 충족하는지 검증합니다.
 // 비활성화된 경우 항상 nil을 반환합니다.
 func (s *Sandbox) ValidatePath(path string) error {

@@ -86,6 +86,11 @@ type MCPDeployExecutor interface {
 	Deploy(ctx context.Context, serviceName string, files []mcp.DeployFile, envVars map[string]string) (string, error)
 }
 
+// CodeOpsExecutor는 에이전트 코드 수정 워크플로우를 실행하는 인터페이스입니다 (SPEC-CODEOPS-001).
+type CodeOpsExecutor interface {
+	Execute(ctx context.Context, req ws.CodeOpsRequestPayload) (ws.CodeOpsResultPayload, error)
+}
+
 // HandlerFunc는 특정 메시지 타입에 대한 핸들러 함수입니다.
 type HandlerFunc func(ctx context.Context, msg ws.AgentMessage) error
 
@@ -127,6 +132,9 @@ type Router struct {
 	mcpDeployer MCPDeployExecutor
 	// codegenSandboxBaseDir는 코드 생성 샌드박스 기본 디렉토리입니다.
 	codegenSandboxBaseDir string
+
+	// codeOpsWorker는 에이전트 코드 수정 워크플로우 실행기입니다 (SPEC-CODEOPS-001).
+	codeOpsWorker CodeOpsExecutor
 
 	// onError는 에러 발생 시 호출되는 콜백입니다.
 	onError func(err error)
@@ -233,6 +241,13 @@ func WithCodegenSandboxBaseDir(dir string) RouterOption {
 	}
 }
 
+// WithCodeOpsWorker는 에이전트 코드 수정 워크플로우 실행기를 설정합니다 (SPEC-CODEOPS-001).
+func WithCodeOpsWorker(worker CodeOpsExecutor) RouterOption {
+	return func(r *Router) {
+		r.codeOpsWorker = worker
+	}
+}
+
 // NewRouter는 새로운 메시지 라우터를 생성합니다.
 func NewRouter(client *Client, opts ...RouterOption) *Router {
 	r := &Router{
@@ -257,6 +272,9 @@ func (r *Router) registerDefaultHandlers() {
 
 	// 작업 요청 핸들러
 	r.RegisterHandler(ws.AgentMsgTaskReq, r.handleTaskRequest)
+
+	// CodeOps 요청 핸들러 (SPEC-CODEOPS-001)
+	r.RegisterHandler(ws.AgentMsgCodeOpsRequest, r.handleCodeOpsRequest)
 
 	// 빌드 요청 핸들러 (FR-P3-01)
 	r.RegisterHandler(ws.AgentMsgBuildReq, r.handleBuildRequest)
@@ -1426,5 +1444,66 @@ func (r *Router) SendProjectContext(rootDir string) error {
 
 	log.Printf("[skill-v2] 프로젝트 컨텍스트 전송 완료 (root=%s, langs=%v, frameworks=%v)",
 		ctx.ProjectRoot, ctx.TechStack.Languages, ctx.TechStack.Frameworks)
+	return nil
+}
+
+// handleCodeOpsRequest는 에이전트 코드 수정 요청을 처리합니다.
+// REQ-003.7: CodeOpsRequest WebSocket 메시지 타입 처리
+// SPEC-CODEOPS-001
+func (r *Router) handleCodeOpsRequest(ctx context.Context, msg ws.AgentMessage) error {
+	var req ws.CodeOpsRequestPayload
+	if err := json.Unmarshal(msg.Payload, &req); err != nil {
+		return fmt.Errorf("codeops_request 페이로드 파싱 실패: %w", err)
+	}
+
+	log.Printf("[codeops] 코드 수정 요청 수신: request_id=%s workspace=%s repo=%s", req.RequestID, req.WorkspaceID, req.RepoURL)
+
+	if r.codeOpsWorker == nil {
+		// codeOpsWorker가 없으면 에러 결과 반환
+		result := ws.CodeOpsResultPayload{
+			RequestID:     req.RequestID,
+			WorkspaceID:   req.WorkspaceID,
+			Success:       false,
+			Error:         "CodeOps 워커가 설정되지 않았습니다",
+			CorrelationID: req.CorrelationID,
+		}
+		return r.sendCodeOpsResult(result)
+	}
+
+	// 비동기로 CodeOps 실행
+	go func() {
+		result, err := r.codeOpsWorker.Execute(ctx, req)
+		if err != nil {
+			log.Printf("[codeops] 코드 수정 실패: request_id=%s err=%v", req.RequestID, err)
+			if result.Error == "" {
+				result.Error = err.Error()
+			}
+		}
+		if sendErr := r.sendCodeOpsResult(result); sendErr != nil {
+			log.Printf("[codeops] 결과 전송 실패: request_id=%s err=%v", req.RequestID, sendErr)
+		}
+	}()
+
+	return nil
+}
+
+// sendCodeOpsResult는 CodeOps 결과를 서버에 전송합니다.
+// REQ-003.8: CodeOpsResult WebSocket 메시지 타입
+func (r *Router) sendCodeOpsResult(result ws.CodeOpsResultPayload) error {
+	payload, err := json.Marshal(result)
+	if err != nil {
+		return fmt.Errorf("codeops_result 직렬화 실패: %w", err)
+	}
+
+	msg := ws.AgentMessage{
+		Type:    ws.AgentMsgCodeOpsResult,
+		Payload: payload,
+	}
+
+	if err := r.client.Send(msg); err != nil {
+		return fmt.Errorf("codeops_result 전송 실패: %w", err)
+	}
+
+	log.Printf("[codeops] 결과 전송 완료: request_id=%s success=%v", result.RequestID, result.Success)
 	return nil
 }

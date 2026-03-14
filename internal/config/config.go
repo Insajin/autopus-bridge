@@ -22,6 +22,24 @@ type Config struct {
 	Reconnection ReconnectionConfig `mapstructure:"reconnection"`
 	Security     SecurityConfig     `mapstructure:"security"`
 	ComputerUse  ComputerUseConfig  `mapstructure:"computer_use"`
+	Git          GitConfig          `mapstructure:"git"`
+}
+
+// GitConfig는 Git 워크스페이스 관련 설정입니다.
+// REQ-001: Bridge GitExecutor 설정
+// SPEC-CODEOPS-001
+type GitConfig struct {
+	// WorkspacesBaseDir는 git clone 기본 디렉토리입니다.
+	// 기본값: ~/.autopus (비어있으면 자동 설정)
+	WorkspacesBaseDir string `mapstructure:"workspaces_base_dir" yaml:"workspaces_base_dir"`
+	// CommitUserName은 에이전트 커밋에 사용할 git 사용자 이름입니다.
+	CommitUserName string `mapstructure:"commit_user_name" yaml:"commit_user_name"`
+	// CommitUserEmail은 에이전트 커밋에 사용할 git 사용자 이메일입니다.
+	CommitUserEmail string `mapstructure:"commit_user_email" yaml:"commit_user_email"`
+	// CloneTimeoutSeconds는 git clone 타임아웃 (초)입니다. 기본값: 300 (5분).
+	CloneTimeoutSeconds int `mapstructure:"clone_timeout_seconds" yaml:"clone_timeout_seconds"`
+	// PushTimeoutSeconds는 git push 타임아웃 (초)입니다. 기본값: 120 (2분).
+	PushTimeoutSeconds int `mapstructure:"push_timeout_seconds" yaml:"push_timeout_seconds"`
 }
 
 // ComputerUseConfig는 Computer Use 컨테이너 격리 설정입니다.

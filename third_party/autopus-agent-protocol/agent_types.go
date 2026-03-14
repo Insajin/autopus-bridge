@@ -90,6 +90,12 @@ const (
 	AgentMsgAgentResponseStream   = "agent_response_stream"   // Bridge -> Server: 스트리밍 텍스트 청크
 	AgentMsgAgentResponseComplete = "agent_response_complete" // Bridge -> Server: 최종 응답 완료
 	AgentMsgAgentResponseError    = "agent_response_error"    // Bridge -> Server: 응답 에러
+
+	// CodeOps message types (SPEC-CODEOPS-001)
+	// REQ-003.7: CodeOpsRequest WebSocket 메시지 타입
+	// REQ-003.8: CodeOpsResult WebSocket 메시지 타입
+	AgentMsgCodeOpsRequest = "codeops_request" // Server -> Bridge: 코드 수정 요청
+	AgentMsgCodeOpsResult  = "codeops_result"  // Bridge -> Server: 코드 수정 결과
 )
 
 const (
