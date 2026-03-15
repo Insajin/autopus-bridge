@@ -10,10 +10,10 @@ builds:
   - id: autopus-bridge
     env:
       - CGO_ENABLED=0
+      - GOEXPERIMENT=jsonv2
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -29,10 +29,10 @@ builds:
     main: ./cmd/mcp-server
     env:
       - CGO_ENABLED=0
+      - GOEXPERIMENT=jsonv2
     goos:
       - linux
       - darwin
-      - windows
     goarch:
       - amd64
       - arm64
@@ -50,10 +50,6 @@ archives:
     formats:
       - tar.gz
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
 
   # autopus-mcp-server 아카이브
   - id: autopus-mcp-server
@@ -62,10 +58,6 @@ archives:
     formats:
       - tar.gz
     name_template: "autopus-mcp-server_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
 
 checksum:
   name_template: 'checksums.txt'
