@@ -104,6 +104,9 @@ const (
 	AgentMsgCodingRelayComplete = "coding_relay_complete" // Bridge -> Server: 릴레이 완료 (성공/실패)
 	AgentMsgCodingRelayError    = "coding_relay_error"    // Bridge -> Server: 릴레이 오류
 	AgentMsgCodingRelayProgress = "coding_relay_progress" // Bridge -> Server: 이터레이션 진행 상황 업데이트
+
+	// AI OAuth 상태 변경 알림 (SPEC-DOMAIN-PARALLEL-001 AC-9)
+	AgentMsgAIOAuthStatusChange = "ai_oauth_status_change" // Server -> Bridge: AI OAuth 연결 상태 변경 알림
 )
 
 const (
@@ -589,4 +592,17 @@ type CodingRelayProgressPayload struct {
 	Iteration int    `json:"iteration"`
 	Status    string `json:"status"`
 	Message   string `json:"message"`
+}
+
+// AIOAuthStatusChangePayload는 서버가 Bridge에 AI OAuth 연결 상태 변경을 알린다.
+// SPEC-DOMAIN-PARALLEL-001 AC-9: Bridge 온보딩 — OAuth 연결 가이드 + 첫 연결 안내
+type AIOAuthStatusChangePayload struct {
+	// Provider는 변경된 OAuth 프로바이더입니다 ("openai" | "google").
+	Provider string `json:"provider"`
+	// Status는 새 연결 상태입니다 ("connected" | "expired" | "disconnected").
+	Status string `json:"status"`
+	// AIMode는 변경 후 워크스페이스 AI 실행 모드입니다 ("oauth" | "bridge" | "byok" | "platform").
+	AIMode string `json:"ai_mode"`
+	// Message는 유저에게 표시할 선택적 안내 메시지입니다.
+	Message string `json:"message,omitempty"`
 }

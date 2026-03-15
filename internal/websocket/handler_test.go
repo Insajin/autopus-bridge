@@ -751,3 +751,156 @@ func TestIsRetryableError_RealNetError(t *testing.T) {
 		t.Errorf("실제 net.DialTimeout 에러(%v)는 재시도 가능해야 합니다", err)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Tests: AI OAuth Status Change Handler (SPEC-DOMAIN-PARALLEL-001 AC-9)
+// ---------------------------------------------------------------------------
+
+func TestHandleAIOAuthStatusChange_Connected(t *testing.T) {
+	t.Parallel()
+
+	var received []ws.AIOAuthStatusChangePayload
+	var mu sync.Mutex
+
+	router := &Router{
+		handlers:   make(map[string]HandlerFunc),
+		handlersMu: sync.RWMutex{},
+		onAIOAuthStatusChange: func(p ws.AIOAuthStatusChangePayload) {
+			mu.Lock()
+			defer mu.Unlock()
+			received = append(received, p)
+		},
+	}
+
+	payload := ws.AIOAuthStatusChangePayload{
+		Provider: "openai",
+		Status:   "connected",
+		AIMode:   "oauth",
+		Message:  "ChatGPT Plus 연결 완료",
+	}
+	data, _ := json.Marshal(payload)
+
+	err := router.handleAIOAuthStatusChange(context.Background(), ws.AgentMessage{
+		Type:    ws.AgentMsgAIOAuthStatusChange,
+		Payload: data,
+	})
+	if err != nil {
+		t.Fatalf("handleAIOAuthStatusChange() error = %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(received) != 1 {
+		t.Fatalf("callback called %d times, want 1", len(received))
+	}
+	if received[0].Provider != "openai" {
+		t.Errorf("Provider = %q, want %q", received[0].Provider, "openai")
+	}
+	if received[0].Status != "connected" {
+		t.Errorf("Status = %q, want %q", received[0].Status, "connected")
+	}
+	if received[0].AIMode != "oauth" {
+		t.Errorf("AIMode = %q, want %q", received[0].AIMode, "oauth")
+	}
+}
+
+func TestHandleAIOAuthStatusChange_NoCallback(t *testing.T) {
+	t.Parallel()
+
+	// 콜백 없이도 패닉 없이 처리
+	router := &Router{
+		handlers:              make(map[string]HandlerFunc),
+		handlersMu:            sync.RWMutex{},
+		onAIOAuthStatusChange: nil,
+	}
+
+	payload := ws.AIOAuthStatusChangePayload{Provider: "google", Status: "expired", AIMode: "bridge"}
+	data, _ := json.Marshal(payload)
+
+	err := router.handleAIOAuthStatusChange(context.Background(), ws.AgentMessage{
+		Type:    ws.AgentMsgAIOAuthStatusChange,
+		Payload: data,
+	})
+	if err != nil {
+		t.Fatalf("handleAIOAuthStatusChange() with nil callback error = %v", err)
+	}
+}
+
+func TestHandleAIOAuthStatusChange_InvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	router := &Router{
+		handlers:   make(map[string]HandlerFunc),
+		handlersMu: sync.RWMutex{},
+	}
+
+	// 잘못된 JSON — 에러 없이 무시해야 함
+	err := router.handleAIOAuthStatusChange(context.Background(), ws.AgentMessage{
+		Type:    ws.AgentMsgAIOAuthStatusChange,
+		Payload: []byte(`{invalid json`),
+	})
+	if err != nil {
+		t.Fatalf("handleAIOAuthStatusChange() with invalid JSON should not return error, got %v", err)
+	}
+}
+
+func TestHandleAIOAuthStatusChange_RegisteredInRouter(t *testing.T) {
+	t.Parallel()
+
+	// NewRouter에 AgentMsgAIOAuthStatusChange 핸들러가 등록되어 있는지 확인
+	r := &Router{
+		handlers:               make(map[string]HandlerFunc),
+		handlersMu:             sync.RWMutex{},
+		codingRelayFeedbackChs: make(map[string]chan ws.CodingRelayFeedbackPayload),
+	}
+	r.registerDefaultHandlers()
+
+	r.handlersMu.RLock()
+	_, exists := r.handlers[ws.AgentMsgAIOAuthStatusChange]
+	r.handlersMu.RUnlock()
+
+	if !exists {
+		t.Errorf("AgentMsgAIOAuthStatusChange handler not registered in Router")
+	}
+}
+
+func TestWithAIOAuthStatusChangeHandler_Option(t *testing.T) {
+	t.Parallel()
+
+	called := false
+	opt := WithAIOAuthStatusChangeHandler(func(p ws.AIOAuthStatusChangePayload) {
+		called = true
+	})
+
+	r := &Router{handlers: make(map[string]HandlerFunc)}
+	opt(r)
+
+	if r.onAIOAuthStatusChange == nil {
+		t.Fatal("onAIOAuthStatusChange should be set after WithAIOAuthStatusChangeHandler option")
+	}
+	r.onAIOAuthStatusChange(ws.AIOAuthStatusChangePayload{})
+	if !called {
+		t.Error("onAIOAuthStatusChange callback not called")
+	}
+}
+
+func TestPrintAIOAuthStatusNotification_Statuses(t *testing.T) {
+	t.Parallel()
+
+	// 패닉 없이 각 status를 처리해야 함
+	statuses := []string{"connected", "expired", "disconnected", "unknown"}
+	providers := []string{"openai", "google", "anthropic"}
+
+	for _, status := range statuses {
+		for _, provider := range providers {
+			p := ws.AIOAuthStatusChangePayload{
+				Provider: provider,
+				Status:   status,
+				AIMode:   "oauth",
+				Message:  "test",
+			}
+			// 패닉 없이 실행되면 통과
+			printAIOAuthStatusNotification(p)
+		}
+	}
+}

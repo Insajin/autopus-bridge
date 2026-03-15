@@ -357,6 +357,10 @@ func runConnectWithOptions(cmd *cobra.Command, args []string, opts connectRunOpt
 		websocket.WithErrorHandler(func(err error) {
 			logger.Error().Err(err).Msg("메시지 처리 오류")
 		}),
+		// SPEC-DOMAIN-PARALLEL-001 AC-9: AI OAuth 상태 변경 시 상태 파일 업데이트
+		websocket.WithAIOAuthStatusChangeHandler(func(payload ws.AIOAuthStatusChangePayload) {
+			updateStatusOAuthMode(taskSender.connState, payload)
+		}),
 	)
 
 	// 동일한 client에 메시지 핸들러 등록 (재생성하지 않음)
@@ -1096,4 +1100,59 @@ func readLockPID(path string) (int, error) {
 	}
 
 	return pid, nil
+}
+
+// updateStatusOAuthMode는 AI OAuth 상태 변경 시 연결 상태 파일의 OAuthMode/OAuthProviders를 갱신합니다.
+// SPEC-DOMAIN-PARALLEL-001 AC-9: OAuth 상태 변경 시 status 명령에 반영
+func updateStatusOAuthMode(connState *ConnectionState, payload ws.AIOAuthStatusChangePayload) {
+	wsID := ""
+	if connState != nil {
+		wsID = connState.WorkspaceID()
+	}
+	statusFile := getScopedStatusFilePath(wsID)
+	if statusFile == "" {
+		return
+	}
+
+	var status StatusInfo
+	if data, err := os.ReadFile(statusFile); err == nil {
+		_ = json.Unmarshal(data, &status)
+	}
+
+	switch payload.Status {
+	case "connected":
+		status.OAuthMode = payload.AIMode
+		// 중복 없이 프로바이더 추가
+		found := false
+		for _, p := range status.OAuthProviders {
+			if p == payload.Provider {
+				found = true
+				break
+			}
+		}
+		if !found {
+			status.OAuthProviders = append(status.OAuthProviders, payload.Provider)
+		}
+	case "disconnected", "expired":
+		// 해당 프로바이더 제거
+		updated := status.OAuthProviders[:0]
+		for _, p := range status.OAuthProviders {
+			if p != payload.Provider {
+				updated = append(updated, p)
+			}
+		}
+		status.OAuthProviders = updated
+		if len(status.OAuthProviders) == 0 {
+			status.OAuthMode = ""
+		}
+	}
+
+	if connState != nil {
+		status.WorkspaceID = connState.WorkspaceID()
+		status.PID = os.Getpid()
+	}
+
+	if err := SaveStatus(&status); err != nil {
+		logger.Warn().Err(err).Msg("AI OAuth 상태 업데이트 실패")
+	}
 }

@@ -152,6 +152,10 @@ type Router struct {
 	codingRelayFeedbackChs   map[string]chan ws.CodingRelayFeedbackPayload
 	codingRelayFeedbackChsMu sync.RWMutex
 
+	// onAIOAuthStatusChange는 AI OAuth 상태 변경 시 호출되는 콜백입니다.
+	// SPEC-DOMAIN-PARALLEL-001 AC-9: Bridge 온보딩 — OAuth 연결 상태 변경 알림
+	onAIOAuthStatusChange func(payload ws.AIOAuthStatusChangePayload)
+
 	// onError는 에러 발생 시 호출되는 콜백입니다.
 	onError func(err error)
 }
@@ -271,6 +275,13 @@ func WithCodingRelayRunner(runner CodingRelayRunner) RouterOption {
 	}
 }
 
+// WithAIOAuthStatusChangeHandler는 AI OAuth 상태 변경 콜백을 설정합니다 (SPEC-DOMAIN-PARALLEL-001 AC-9).
+func WithAIOAuthStatusChangeHandler(fn func(payload ws.AIOAuthStatusChangePayload)) RouterOption {
+	return func(r *Router) {
+		r.onAIOAuthStatusChange = fn
+	}
+}
+
 // NewRouter는 새로운 메시지 라우터를 생성합니다.
 func NewRouter(client *Client, opts ...RouterOption) *Router {
 	r := &Router{
@@ -336,6 +347,9 @@ func (r *Router) registerDefaultHandlers() {
 	// CodingRelay 핸들러 (SPEC-CODING-RELAY-001)
 	r.RegisterHandler(ws.AgentMsgCodingRelayRequest, r.handleCodingRelayRequest)
 	r.RegisterHandler(ws.AgentMsgCodingRelayFeedback, r.handleCodingRelayFeedback)
+
+	// AI OAuth 상태 변경 핸들러 (SPEC-DOMAIN-PARALLEL-001 AC-9)
+	r.RegisterHandler(ws.AgentMsgAIOAuthStatusChange, r.handleAIOAuthStatusChange)
 }
 
 // RegisterHandler는 메시지 타입에 대한 핸들러를 등록합니다.
@@ -1619,4 +1633,60 @@ func (r *Router) sendCodingRelayError(payload ws.CodingRelayErrorPayload) error 
 	}
 	log.Printf("[coding-relay] 에러 전송: request_id=%s code=%s err=%s", payload.RequestID, payload.Code, payload.Error)
 	return r.client.Send(ws.AgentMessage{Type: ws.AgentMsgCodingRelayError, Payload: data})
+}
+
+// handleAIOAuthStatusChange는 서버로부터 AI OAuth 연결 상태 변경 알림을 처리합니다.
+// SPEC-DOMAIN-PARALLEL-001 AC-9: Bridge 온보딩 — OAuth 연결 가이드 + 첫 연결 안내
+func (r *Router) handleAIOAuthStatusChange(ctx context.Context, msg ws.AgentMessage) error {
+	var payload ws.AIOAuthStatusChangePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		log.Printf("[ai-oauth] 상태 변경 페이로드 파싱 실패: %v", err)
+		return nil // 파싱 실패는 무시 (비차단)
+	}
+
+	log.Printf("[ai-oauth] 상태 변경: provider=%s status=%s ai_mode=%s",
+		payload.Provider, payload.Status, payload.AIMode)
+
+	// 터미널에 알림 출력
+	printAIOAuthStatusNotification(payload)
+
+	// 커스텀 콜백 호출 (상태 파일 업데이트 등)
+	if r.onAIOAuthStatusChange != nil {
+		r.onAIOAuthStatusChange(payload)
+	}
+
+	return nil
+}
+
+// printAIOAuthStatusNotification는 AI OAuth 상태 변경을 터미널에 출력합니다.
+// SPEC-DOMAIN-PARALLEL-001 AC-9
+func printAIOAuthStatusNotification(payload ws.AIOAuthStatusChangePayload) {
+	providerLabel := map[string]string{
+		"openai": "OpenAI (ChatGPT)",
+		"google": "Google (Gemini)",
+	}
+	label, ok := providerLabel[payload.Provider]
+	if !ok {
+		label = payload.Provider
+	}
+
+	switch payload.Status {
+	case "connected":
+		fmt.Printf("\n  [AI OAuth] %s 연결됨\n", label)
+		fmt.Printf("  AI 모드: %s → 서버 직접 HTTP 추론 활성화\n", payload.AIMode)
+		fmt.Println("  Bridge는 이제 코딩 세션과 Git 관리 전용으로 동작합니다.")
+		if payload.Message != "" {
+			fmt.Printf("  %s\n", payload.Message)
+		}
+		fmt.Println()
+	case "expired":
+		fmt.Printf("\n  [AI OAuth] %s 토큰 만료\n", label)
+		fmt.Println("  워크스페이스 설정에서 OAuth를 재연결하세요.")
+		fmt.Println("  재연결 전까지 Bridge AI 폴백으로 동작합니다.")
+		fmt.Println()
+	case "disconnected":
+		fmt.Printf("\n  [AI OAuth] %s 연결 해제됨\n", label)
+		fmt.Println("  Bridge AI 서빙으로 전환합니다.")
+		fmt.Println()
+	}
 }

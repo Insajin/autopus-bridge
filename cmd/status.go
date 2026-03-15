@@ -36,6 +36,11 @@ type StatusInfo struct {
 	PID int `json:"pid,omitempty"`
 	// WorkspaceID는 이 상태가 속한 워크스페이스 ID입니다.
 	WorkspaceID string `json:"workspace_id,omitempty"`
+	// OAuthMode는 현재 AI 실행 모드입니다 ("oauth" | "bridge" | "byok" | "platform" | "").
+	// SPEC-DOMAIN-PARALLEL-001 AC-9: OAuth 연결 시 status 명령에 모드 표시
+	OAuthMode string `json:"oauth_mode,omitempty"`
+	// OAuthProviders는 연결된 OAuth 프로바이더 목록입니다 (예: ["openai", "google"]).
+	OAuthProviders []string `json:"oauth_providers,omitempty"`
 }
 
 // statusCmd는 현재 연결 상태를 확인하는 명령어입니다.
@@ -167,6 +172,14 @@ func printStatusFull(status *StatusInfo) error {
 		fmt.Printf("워크스페이스: %s\n", status.WorkspaceID)
 	}
 
+	// AI 실행 모드 (SPEC-DOMAIN-PARALLEL-001 AC-9)
+	if status.OAuthMode != "" {
+		fmt.Printf("AI 모드:     %s\n", formatAIMode(status.OAuthMode))
+	}
+	if len(status.OAuthProviders) > 0 {
+		fmt.Printf("OAuth 연결:  %s\n", strings.Join(status.OAuthProviders, ", "))
+	}
+
 	// 서버 URL
 	if status.ServerURL != "" {
 		fmt.Printf("서버:        %s\n", status.ServerURL)
@@ -205,9 +218,34 @@ func printStatusFull(status *StatusInfo) error {
 	if !status.Connected {
 		fmt.Println("서버에 연결하려면:")
 		fmt.Println("  autopus connect --token <JWT_TOKEN>")
+	} else if status.OAuthMode == "" || (status.OAuthMode != "oauth" && len(status.OAuthProviders) == 0) {
+		// SPEC-DOMAIN-PARALLEL-001 AC-9: OAuth 미연결 시 온보딩 가이드 표시
+		fmt.Println("OAuth 연결 안내")
+		fmt.Println("---------------")
+		fmt.Println("OpenAI(ChatGPT) 또는 Google(Gemini) 구독 계정을 연결하면")
+		fmt.Println("Bridge 없이 서버에서 직접 AI 추론이 가능합니다.")
+		fmt.Println()
+		fmt.Println("연결 방법: 워크스페이스 설정 > AI 프로바이더 > OAuth 연결")
 	}
 
 	return nil
+}
+
+// formatAIMode는 AI 실행 모드를 읽기 쉬운 형식으로 포맷합니다.
+// SPEC-DOMAIN-PARALLEL-001 AC-9
+func formatAIMode(mode string) string {
+	switch mode {
+	case "oauth":
+		return "OAuth (서버 직접 HTTP)"
+	case "bridge":
+		return "Bridge (로컬 AI)"
+	case "byok":
+		return "BYOK (API 키)"
+	case "platform":
+		return "Platform (Autopus 제공)"
+	default:
+		return mode
+	}
 }
 
 // getStatusFilePath는 상태 파일 경로를 반환합니다.
