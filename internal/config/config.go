@@ -23,6 +23,18 @@ type Config struct {
 	Security     SecurityConfig     `mapstructure:"security"`
 	ComputerUse  ComputerUseConfig  `mapstructure:"computer_use"`
 	Git          GitConfig          `mapstructure:"git"`
+	Reranker     RerankerConfig     `mapstructure:"reranker"`
+}
+
+// RerankerConfig는 ONNX 리랭커 서비스 설정입니다.
+// SPEC-RAGEVO-001 REQ-D: Bridge 로컬 리랭커
+type RerankerConfig struct {
+	// Enabled는 리랭커 서비스 활성화 여부입니다.
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// ModelPath는 ONNX 모델 파일 경로입니다. 비어있으면 ~/.autopus-bridge/models 사용.
+	ModelPath string `mapstructure:"model_path" yaml:"model_path"`
+	// UseGPU는 GPU(CUDA/CoreML) 가속 사용 여부입니다.
+	UseGPU bool `mapstructure:"use_gpu" yaml:"use_gpu"`
 }
 
 // GitConfig는 Git 워크스페이스 관련 설정입니다.
