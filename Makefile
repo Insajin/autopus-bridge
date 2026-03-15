@@ -12,10 +12,10 @@ BINARY := autopus-bridge
 .PHONY: build test lint vet clean release-dry-run release
 
 build:
-	CGO_ENABLED=0 go build -ldflags '$(LDFLAGS)' -o $(BINARY) .
+	CGO_ENABLED=0 GOEXPERIMENT=jsonv2 go build -ldflags '$(LDFLAGS)' -o $(BINARY) .
 
 test:
-	go test -v ./...
+	GOEXPERIMENT=jsonv2 go test -v ./...
 
 lint:
 	golangci-lint run ./...

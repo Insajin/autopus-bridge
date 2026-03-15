@@ -91,6 +91,15 @@ type CodeOpsExecutor interface {
 	Execute(ctx context.Context, req ws.CodeOpsRequestPayload) (ws.CodeOpsResultPayload, error)
 }
 
+// CodingRelayRunner는 코딩 릴레이 루프를 실행하는 인터페이스입니다 (SPEC-CODING-RELAY-001).
+// executor 패키지와의 순환 임포트를 방지하기 위한 콜백 기반 설계입니다.
+type CodingRelayRunner interface {
+	// RunRelay는 릴레이 루프를 비동기로 실행합니다.
+	// sendMsg는 WS 메시지 전송 콜백 (msgType string, payload []byte)입니다.
+	// feedbackCh는 Worker AI 피드백 수신 채널입니다 (feedback string, approved bool).
+	RunRelay(ctx context.Context, req ws.CodingRelayRequestPayload, sendMsg func(msgType string, payload []byte) error, feedbackCh <-chan ws.CodingRelayFeedbackPayload)
+}
+
 // HandlerFunc는 특정 메시지 타입에 대한 핸들러 함수입니다.
 type HandlerFunc func(ctx context.Context, msg ws.AgentMessage) error
 
@@ -135,6 +144,13 @@ type Router struct {
 
 	// codeOpsWorker는 에이전트 코드 수정 워크플로우 실행기입니다 (SPEC-CODEOPS-001).
 	codeOpsWorker CodeOpsExecutor
+
+	// codingRelayRunner는 코딩 릴레이 루프 실행기입니다 (SPEC-CODING-RELAY-001).
+	codingRelayRunner CodingRelayRunner
+
+	// codingRelayFeedbackChs는 릴레이 request_id별 피드백 채널 맵입니다.
+	codingRelayFeedbackChs   map[string]chan ws.CodingRelayFeedbackPayload
+	codingRelayFeedbackChsMu sync.RWMutex
 
 	// onError는 에러 발생 시 호출되는 콜백입니다.
 	onError func(err error)
@@ -248,10 +264,18 @@ func WithCodeOpsWorker(worker CodeOpsExecutor) RouterOption {
 	}
 }
 
+// WithCodingRelayRunner는 코딩 릴레이 실행기를 설정합니다 (SPEC-CODING-RELAY-001).
+func WithCodingRelayRunner(runner CodingRelayRunner) RouterOption {
+	return func(r *Router) {
+		r.codingRelayRunner = runner
+	}
+}
+
 // NewRouter는 새로운 메시지 라우터를 생성합니다.
 func NewRouter(client *Client, opts ...RouterOption) *Router {
 	r := &Router{
-		handlers: make(map[string]HandlerFunc),
+		handlers:               make(map[string]HandlerFunc),
+		codingRelayFeedbackChs: make(map[string]chan ws.CodingRelayFeedbackPayload),
 		client:   client,
 	}
 
@@ -308,6 +332,10 @@ func (r *Router) registerDefaultHandlers() {
 
 	// Agent Response Protocol 핸들러 (SPEC-BRIDGE-GATEWAY-001)
 	r.RegisterHandler(ws.AgentMsgAgentResponseReq, r.handleAgentResponseRequest)
+
+	// CodingRelay 핸들러 (SPEC-CODING-RELAY-001)
+	r.RegisterHandler(ws.AgentMsgCodingRelayRequest, r.handleCodingRelayRequest)
+	r.RegisterHandler(ws.AgentMsgCodingRelayFeedback, r.handleCodingRelayFeedback)
 }
 
 // RegisterHandler는 메시지 타입에 대한 핸들러를 등록합니다.
@@ -1506,4 +1534,89 @@ func (r *Router) sendCodeOpsResult(result ws.CodeOpsResultPayload) error {
 
 	log.Printf("[codeops] 결과 전송 완료: request_id=%s success=%v", result.RequestID, result.Success)
 	return nil
+}
+
+// handleCodingRelayRequest는 코딩 릴레이 세션 시작 요청을 처리합니다.
+// SPEC-CODING-RELAY-001
+func (r *Router) handleCodingRelayRequest(ctx context.Context, msg ws.AgentMessage) error {
+	var req ws.CodingRelayRequestPayload
+	if err := json.Unmarshal(msg.Payload, &req); err != nil {
+		return fmt.Errorf("coding_relay_request 페이로드 파싱 실패: %w", err)
+	}
+
+	log.Printf("[coding-relay] 릴레이 요청 수신: request_id=%s workspace=%s worker=%s", req.RequestID, req.WorkspaceID, req.WorkerID)
+
+	if r.codingRelayRunner == nil {
+		// Runner가 없으면 에러 결과 반환 (연결 끊김 시 전송 실패를 무시)
+		_ = r.sendCodingRelayError(ws.CodingRelayErrorPayload{
+			RequestID: req.RequestID,
+			Error:     "CodingRelayRunner가 설정되지 않았습니다",
+			Code:      "runner_not_configured",
+		})
+		return nil
+	}
+
+	// 피드백 채널 생성 (릴레이 루프가 Worker 피드백을 대기)
+	feedbackCh := make(chan ws.CodingRelayFeedbackPayload, 1)
+	r.codingRelayFeedbackChsMu.Lock()
+	r.codingRelayFeedbackChs[req.RequestID] = feedbackCh
+	r.codingRelayFeedbackChsMu.Unlock()
+
+	// WS 메시지 전송 콜백 — 릴레이 루프가 WS로 결과를 보낼 때 사용
+	sendMsg := func(msgType string, payload []byte) error {
+		return r.client.Send(ws.AgentMessage{Type: msgType, Payload: payload})
+	}
+
+	// 비동기로 릴레이 루프 실행 (executor.CodingRelayRunner 위임)
+	go func() {
+		defer func() {
+			r.codingRelayFeedbackChsMu.Lock()
+			delete(r.codingRelayFeedbackChs, req.RequestID)
+			r.codingRelayFeedbackChsMu.Unlock()
+			close(feedbackCh)
+		}()
+
+		r.codingRelayRunner.RunRelay(ctx, req, sendMsg, feedbackCh)
+	}()
+
+	return nil
+}
+
+// handleCodingRelayFeedback는 Worker AI 피드백을 처리합니다.
+// SPEC-CODING-RELAY-001
+func (r *Router) handleCodingRelayFeedback(_ context.Context, msg ws.AgentMessage) error {
+	var feedback ws.CodingRelayFeedbackPayload
+	if err := json.Unmarshal(msg.Payload, &feedback); err != nil {
+		return fmt.Errorf("coding_relay_feedback 페이로드 파싱 실패: %w", err)
+	}
+
+	log.Printf("[coding-relay] 피드백 수신: request_id=%s approved=%v", feedback.RequestID, feedback.Approved)
+
+	// 해당 릴레이 루프의 피드백 채널에 전달
+	r.codingRelayFeedbackChsMu.RLock()
+	ch, ok := r.codingRelayFeedbackChs[feedback.RequestID]
+	r.codingRelayFeedbackChsMu.RUnlock()
+
+	if !ok {
+		log.Printf("[coding-relay] 피드백 채널 없음: request_id=%s (세션이 이미 종료됨)", feedback.RequestID)
+		return nil
+	}
+
+	select {
+	case ch <- feedback:
+	default:
+		log.Printf("[coding-relay] 피드백 채널 꽉 참: request_id=%s", feedback.RequestID)
+	}
+
+	return nil
+}
+
+// sendCodingRelayError는 릴레이 에러를 서버에 전송합니다.
+func (r *Router) sendCodingRelayError(payload ws.CodingRelayErrorPayload) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("coding_relay_error 직렬화 실패: %w", err)
+	}
+	log.Printf("[coding-relay] 에러 전송: request_id=%s code=%s err=%s", payload.RequestID, payload.Code, payload.Error)
+	return r.client.Send(ws.AgentMessage{Type: ws.AgentMsgCodingRelayError, Payload: data})
 }

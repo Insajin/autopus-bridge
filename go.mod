@@ -1,6 +1,6 @@
 module github.com/insajin/autopus-bridge
 
-go 1.25
+go 1.25.0
 
 replace github.com/insajin/autopus-agent-protocol => ./third_party/autopus-agent-protocol
 
@@ -27,6 +27,7 @@ require (
 )
 
 require (
+	github.com/bpowers/go-claudecode v0.0.0-20260222214101-7fcfa3956a87 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 )

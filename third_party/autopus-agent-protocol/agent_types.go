@@ -96,6 +96,14 @@ const (
 	// REQ-003.8: CodeOpsResult WebSocket 메시지 타입
 	AgentMsgCodeOpsRequest = "codeops_request" // Server -> Bridge: 코드 수정 요청
 	AgentMsgCodeOpsResult  = "codeops_result"  // Bridge -> Server: 코드 수정 결과
+
+	// CodingRelay message types (SPEC-CODING-RELAY-001)
+	AgentMsgCodingRelayRequest  = "coding_relay_request"  // Server -> Bridge: 코딩 릴레이 시작 요청
+	AgentMsgCodingRelayEvaluate = "coding_relay_evaluate" // Bridge -> Server: 이터레이션 결과 (Worker 평가 대기)
+	AgentMsgCodingRelayFeedback = "coding_relay_feedback" // Server -> Bridge: Worker AI 피드백 또는 APPROVED
+	AgentMsgCodingRelayComplete = "coding_relay_complete" // Bridge -> Server: 릴레이 완료 (성공/실패)
+	AgentMsgCodingRelayError    = "coding_relay_error"    // Bridge -> Server: 릴레이 오류
+	AgentMsgCodingRelayProgress = "coding_relay_progress" // Bridge -> Server: 이터레이션 진행 상황 업데이트
 )
 
 const (
@@ -523,3 +531,62 @@ const (
 	ComputerUseMaxActiveHr        = 2               // 2 hours max active session
 	MaxConcurrentComputerSessions = 2               // per workspace
 )
+
+// CodingRelayRequestPayload는 Server가 Bridge에 코딩 릴레이 세션을 시작하도록 요청한다.
+type CodingRelayRequestPayload struct {
+	RequestID        string  `json:"request_id"`
+	TaskDescription  string  `json:"task_description"`
+	RepoConnectionID string  `json:"repo_connection_id"`
+	SessionID        string  `json:"session_id,omitempty"`
+	MaxIterations    int     `json:"max_iterations,omitempty"`
+	WorkspaceID      string  `json:"workspace_id"`
+	WorkerID         string  `json:"worker_id"`
+	MaxBudgetUSD     float64 `json:"max_budget_usd,omitempty"`
+}
+
+// CodingRelayEvaluatePayload는 Bridge가 이터레이션 결과를 Server에 전달하고 Worker 평가를 요청한다.
+type CodingRelayEvaluatePayload struct {
+	RequestID    string   `json:"request_id"`
+	Iteration    int      `json:"iteration"`
+	Content      string   `json:"content"`
+	DiffSummary  string   `json:"diff_summary"`
+	TestOutput   string   `json:"test_output"`
+	FilesChanged []string `json:"files_changed"`
+	SessionID    string   `json:"session_id"`
+}
+
+// CodingRelayFeedbackPayload는 Server가 Worker AI 평가 결과(피드백 또는 승인)를 Bridge에 전달한다.
+type CodingRelayFeedbackPayload struct {
+	RequestID string `json:"request_id"`
+	Feedback  string `json:"feedback"`
+	Approved  bool   `json:"approved"`
+}
+
+// CodingRelayCompletePayload는 Bridge가 릴레이 세션 완료 결과를 Server에 전달한다.
+type CodingRelayCompletePayload struct {
+	RequestID    string   `json:"request_id"`
+	Success      bool     `json:"success"`
+	DiffSummary  string   `json:"diff_summary"`
+	FilesChanged []string `json:"files_changed"`
+	TestOutput   string   `json:"test_output"`
+	SessionID    string   `json:"session_id"`
+	PushedBranch string   `json:"pushed_branch,omitempty"`
+	Iterations   int      `json:"iterations"`
+	CostUSD      float64  `json:"cost_usd"`
+}
+
+// CodingRelayErrorPayload는 Bridge가 릴레이 세션 오류를 Server에 보고한다.
+type CodingRelayErrorPayload struct {
+	RequestID string `json:"request_id"`
+	Error     string `json:"error"`
+	Code      string `json:"code"`
+	SessionID string `json:"session_id,omitempty"`
+}
+
+// CodingRelayProgressPayload는 Bridge가 이터레이션 진행 상황을 Server에 업데이트한다.
+type CodingRelayProgressPayload struct {
+	RequestID string `json:"request_id"`
+	Iteration int    `json:"iteration"`
+	Status    string `json:"status"`
+	Message   string `json:"message"`
+}
